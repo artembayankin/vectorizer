@@ -206,7 +206,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
           <input type="radio" name="bg" id="bgAll" value="all"><label for="bgAll">Убрать везде</label>
           <input type="radio" name="bg" id="bgEdges" value="edges"><label for="bgEdges">От краёв</label>
         </div>
-        <span class="hint" id="bgHint">Цвет фона берётся с краёв картинки. «Убрать везде» вырезает его и внутри фигур: дырки в буквах, просветы в логотипе.</span>
+        <span class="hint" id="bgHint">Цвет фона берётся с краёв картинки. «Убрать везде» вырезает его и внутри фигур (дырки в буквах), «От краёв» — только снаружи. Остальные цвета, даже светлые, остаются.</span>
         <div class="ctl" id="bgTolCtl" hidden>
           <div class="top"><span>Допуск фона</span><span class="val" id="bgTolVal"></span></div>
           <input type="range" id="bgTol" min="0" max="50" step="1" value="10">
@@ -410,10 +410,15 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     prep = { W, H, data, sx: src.w / W, sy: src.h / H, key };
     return prep;
   }
+  // real transparency, not a stray half-transparent edge row some files have
   function hasTransparency() {
-    const d = getPrep().data;
-    for (let i = 3; i < d.length; i += 4 * 7) if (d[i] < 250) return true;
-    return false;
+    const p = getPrep(), d = p.data, W = p.W, H = p.H;
+    let n = 0, t = 0;
+    for (let y = 2; y < H - 2; y += 2) for (let x = 2; x < W - 2; x += 2) {
+      n++;
+      if (d[(y * W + x) * 4 + 3] < 250) t++;
+    }
+    return t > Math.max(3, 0.002 * n);
   }
   function cornersUniform() {
     const p = getPrep(), d = p.data, W = p.W, H = p.H;
@@ -422,10 +427,11 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     return idx.every(i => Math.abs(d[i] - d[c0]) + Math.abs(d[i + 1] - d[c0 + 1]) + Math.abs(d[i + 2] - d[c0 + 2]) < 40);
   }
 
-  // Alpha (0..1) and colours to trace. Background removal works like
-  // "colour to alpha": a pixel's opacity is how far it is from the background
-  // colour, and its colour is un-mixed from the background - so anti-aliased
-  // edges keep sub-pixel accuracy and enclosed background (holes) is cut out.
+  // Alpha (0..1) and colours to trace. Background removal: a pixel close to
+  // the background colour is background; every other pixel keeps its colour
+  // fully (a light pink stays pink). Only the anti-aliased rim next to the
+  // background becomes partly transparent: it is un-mixed against the solid
+  // colour next to it, so edges keep sub-pixel accuracy.
   function pixelsToTrace(p) {
     const { W, H, data } = p, N = W * H;
     const A = new Float32Array(N);
@@ -443,23 +449,20 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     if (!rs.length) { for (let i = 0; i < N; i++) A[i] = data[i * 4 + 3] / 255; return { A, D: data }; }
     const med = a => a.sort((u, v) => u - v)[a.length >> 1];
     const bg = [med(rs), med(gs), med(bs)];
-    const t = +ui.bgTol.value / 100;
-    const a0 = new Float32Array(N);
+    const tolD = 4 + +ui.bgTol.value / 100 * 255;      // colour distance that still counts as background
+    const dist = new Float32Array(N);
     for (let i = 0; i < N; i++) {
-      let a = 0;
-      for (let c = 0; c < 3; c++) {
-        const v = data[i * 4 + c], b = bg[c];
-        const ac = v > b ? (v - b) / Math.max(1, 255 - b) : (b - v) / Math.max(1, b);
-        if (ac > a) a = ac;
-      }
-      a0[i] = a;
+      const dr = data[i * 4] - bg[0], dg = data[i * 4 + 1] - bg[1], db = data[i * 4 + 2] - bg[2];
+      dist[i] = Math.sqrt(dr * dr + dg * dg + db * db);
     }
-    let affect = null;
-    if (mode === 'edges') {
-      // only the background connected to the borders (and a 2 px rim around it)
-      const seen = new Uint8Array(N), stack = new Int32Array(N);
+    const isBg = new Uint8Array(N);
+    if (mode === 'all') {
+      for (let i = 0; i < N; i++) if (dist[i] <= tolD || data[i * 4 + 3] < 8) isBg[i] = 1;
+    } else {
+      // only the background connected to the borders
+      const stack = new Int32Array(N);
       let sp = 0;
-      const push = i => { if (!seen[i] && a0[i] <= t + 0.04) { seen[i] = 1; stack[sp++] = i; } };
+      const push = i => { if (!isBg[i] && (dist[i] <= tolD || data[i * 4 + 3] < 8)) { isBg[i] = 1; stack[sp++] = i; } };
       for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
       for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
       while (sp) {
@@ -467,26 +470,30 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         if (x > 0) push(i - 1); if (x < W - 1) push(i + 1);
         if (y > 0) push(i - W); if (y < H - 1) push(i + W);
       }
-      affect = new Uint8Array(N);
-      for (let i = 0; i < N; i++) if (seen[i]) {
-        const x = i % W, y = (i / W) | 0;
-        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-          const xx = x + dx, yy = y + dy;
-          if (xx >= 0 && yy >= 0 && xx < W && yy < H) affect[yy * W + xx] = 1;
-        }
-      }
     }
-    for (let i = 0; i < N; i++) {
-      const own = data[i * 4 + 3] / 255;
-      if (affect && !affect[i]) { A[i] = own; continue; }
-      const a = Math.min(1, Math.max(0, (a0[i] - t) / Math.max(0.05, 1 - t)));
-      A[i] = a * own;
-      if (a > 0.02 && a < 1) {
-        for (let c = 0; c < 3; c++) {
-          const v = (data[i * 4 + c] - bg[c] * (1 - a)) / a;
-          D[i * 4 + c] = v;
-        }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x, own = data[i * 4 + 3] / 255;
+      if (isBg[i]) { A[i] = 0; continue; }
+      let edge = false;
+      for (let dy = -1; dy <= 1 && !edge; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx >= 0 && yy >= 0 && xx < W && yy < H && isBg[yy * W + xx]) { edge = true; break; }
       }
+      if (!edge) { A[i] = own; continue; }
+      // the solid colour beside this rim pixel: the one furthest from the background
+      let f = i, fd = dist[i];
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        const j = yy * W + xx;
+        if (!isBg[j] && dist[j] > fd) { fd = dist[j]; f = j; }
+      }
+      const F = [data[f * 4] - bg[0], data[f * 4 + 1] - bg[1], data[f * 4 + 2] - bg[2]];
+      const Pv = [data[i * 4] - bg[0], data[i * 4 + 1] - bg[1], data[i * 4 + 2] - bg[2]];
+      const FF = F[0] * F[0] + F[1] * F[1] + F[2] * F[2];
+      const a = FF > 1 ? Math.max(0, Math.min(1, (Pv[0] * F[0] + Pv[1] * F[1] + Pv[2] * F[2]) / FF)) : 1;
+      A[i] = a * own;
+      D[i * 4] = data[f * 4]; D[i * 4 + 1] = data[f * 4 + 1]; D[i * 4 + 2] = data[f * 4 + 2];
     }
     return { A, D };
   }
@@ -495,6 +502,50 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     const rm = (r1 + r2) / 2, dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
     return (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
   }
+  // anti-aliased edges between two colours form small "blend" colours (a
+  // thin ring around every shape); drop them so edge pixels go to the nearer
+  // of the two real colours and the border falls in the middle
+  function dropBlends(C, share, solid) {
+    let alive = C.map((c, i) => i).filter(i => share[i] > 0);
+    // near-identical colours (compression noise splits one colour into two)
+    // are one colour: the smaller one joins the bigger
+    for (let merged = true; merged;) {
+      merged = false;
+      for (const a of alive) for (const b of alive) {
+        if (a === b || share[a] < share[b]) continue;
+        if (Math.hypot(C[a][0] - C[b][0], C[a][1] - C[b][1], C[a][2] - C[b][2]) < 34) {
+          const w = share[a] + share[b];
+          C[a] = C[a].map((v, q) => (v * share[a] + C[b][q] * share[b]) / w);
+          share[a] = w;
+          alive = alive.filter(i => i !== b);
+          merged = true;
+          break;
+        }
+      }
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const small = alive.filter(i => share[i] < 0.15 && !(solid && solid[i])).sort((a, b) => share[a] - share[b]);
+      for (const c of small) {
+        const big = alive.filter(i => i !== c && share[i] > share[c]);
+        let blend = false;
+        for (let x = 0; x < big.length && !blend; x++) for (let y = x + 1; y < big.length && !blend; y++) {
+          const a = C[big[x]], b = C[big[y]], p = C[c];
+          const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+          const L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2;
+          if (L2 < 1) continue;
+          const t = (ab[0] * ap[0] + ab[1] * ap[1] + ab[2] * ap[2]) / L2;
+          if (t < 0.06 || t > 0.94) continue;
+          const d = Math.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
+          if (d < 14 + 0.06 * Math.sqrt(L2)) blend = true;
+        }
+        if (blend) { alive = alive.filter(i => i !== c); changed = true; break; }
+      }
+    }
+    return alive.map(i => C[i].map(Math.round));
+  }
+
   function palette(p, A, k) {
     const { W, H, data } = p, N = W * H;
     // exact palette when the picture has few flat colours
@@ -511,8 +562,21 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       const top = [...exact.entries()].sort((a, b) => b[1] - a[1]);
       const covered = top.slice(0, k).reduce((s, e) => s + e[1], 0);
       if (top.length <= k || covered > 0.985 * opaque) {
-        const cs = top.slice(0, k).map(([c]) => [c >> 16, (c >> 8) & 255, c & 255]);
-        if (cs.length) return cs;
+        const sel = top.slice(0, k);
+        const cs = sel.map(([c]) => [c >> 16, (c >> 8) & 255, c & 255]);
+        // a real flat colour has solid areas; an edge blend is only a thin rim
+        const idx = new Map(sel.map(([c], i) => [c, i]));
+        const inner = new Float64Array(sel.length);
+        const key = i => (data[i * 4] << 16) | (data[i * 4 + 1] << 8) | data[i * 4 + 2];
+        for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+          const i = y * W + x;
+          if (A[i] < 0.9) continue;
+          const c = key(i), q = idx.get(c);
+          if (q === undefined) continue;
+          if (key(i - 1) === c && key(i + 1) === c && key(i - W) === c && key(i + W) === c) inner[q]++;
+        }
+        const solid = sel.map((e, i) => inner[i] >= Math.max(4, 0.05 * e[1]));
+        if (cs.length) return dropBlends(cs, sel.map(e => e[1] / Math.max(1, opaque)), solid);
       }
     }
     // k-means++ on a sample of opaque pixels
@@ -561,28 +625,8 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     // nearer of the two real colours and the border falls in the middle
     const share = new Float64Array(C.length);
     for (let j = 0; j < S; j++) share[lab[j]] += 1 / S;
-    let alive = C.map((c, i) => i).filter(i => share[i] > 0);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      const small = alive.filter(i => share[i] < 0.04).sort((a, b) => share[a] - share[b]);
-      for (const c of small) {
-        const big = alive.filter(i => i !== c && share[i] > share[c]);
-        let blend = false;
-        for (let x = 0; x < big.length && !blend; x++) for (let y = x + 1; y < big.length && !blend; y++) {
-          const a = C[big[x]], b = C[big[y]], p = C[c];
-          const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
-          const L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2;
-          if (L2 < 1) continue;
-          const t = (ab[0] * ap[0] + ab[1] * ap[1] + ab[2] * ap[2]) / L2;
-          if (t < 0.06 || t > 0.94) continue;
-          const d = Math.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
-          if (d < 14 + 0.06 * Math.sqrt(L2)) blend = true;
-        }
-        if (blend) { alive = alive.filter(i => i !== c); changed = true; break; }
-      }
-    }
-    return alive.map(i => C[i].map(Math.round));
+    return dropBlends(C, share);
+
   }
 
   // ---------- marching squares on a soft field, sub-pixel contour ----------
@@ -810,6 +854,55 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     return out;
   }
 
+  // upright ellipse through the points (least squares of A x² + B y² + C x + D y = 1)
+  function fitEllipse(P) {
+    const n = P.length;
+    if (n < 12) return null;
+    let mx = 0, my = 0;
+    for (const q of P) { mx += q[0]; my += q[1]; }
+    mx /= n; my /= n;
+    const M = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]], v = [0, 0, 0, 0];
+    for (const q of P) {
+      const x = q[0] - mx, y = q[1] - my, r = [x * x, y * y, x, y];
+      for (let i = 0; i < 4; i++) { v[i] += r[i]; for (let j = 0; j < 4; j++) M[i][j] += r[i] * r[j]; }
+    }
+    // solve M a = v (Gauss)
+    const a = v.slice(), A = M.map(r => r.slice());
+    for (let i = 0; i < 4; i++) {
+      let piv = i;
+      for (let r = i + 1; r < 4; r++) if (Math.abs(A[r][i]) > Math.abs(A[piv][i])) piv = r;
+      [A[i], A[piv]] = [A[piv], A[i]]; [a[i], a[piv]] = [a[piv], a[i]];
+      if (Math.abs(A[i][i]) < 1e-12) return null;
+      for (let r = 0; r < 4; r++) {
+        if (r === i) continue;
+        const f = A[r][i] / A[i][i];
+        for (let c = i; c < 4; c++) A[r][c] -= f * A[i][c];
+        a[r] -= f * a[i];
+      }
+    }
+    const [Aa, Bb, Cc, Dd] = a.map((x, i) => x / A[i][i]);
+    if (Aa <= 0 || Bb <= 0) return null;
+    const x0 = -Cc / (2 * Aa), y0 = -Dd / (2 * Bb);
+    const G = 1 + Aa * x0 * x0 + Bb * y0 * y0;
+    if (G <= 0) return null;
+    const rx = Math.sqrt(G / Aa), ry = Math.sqrt(G / Bb);
+    if (!isFinite(rx) || !isFinite(ry) || rx < 2 || ry < 2) return null;
+    // nearly round: make it an exact circle
+    let RX = rx, RY = ry;
+    if (Math.abs(rx - ry) / Math.max(rx, ry) < 0.03) RX = RY = (rx + ry) / 2;
+    return { cx: x0 + mx, cy: y0 + my, rx: RX, ry: RY };
+  }
+
+  function hull2d(pts) {
+    const p = pts.map(q => [q[0], q[1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    if (p.length < 3) return p;
+    const cr = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lo = [], up = [];
+    for (const q of p) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
+    for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
+    return lo.slice(0, -1).concat(up.slice(0, -1));
+  }
+
   // A narrow end (the top of a letter stem) is found as one U-turn. It is
   // really two corners joined by a short straight cap: put them back.
   function splitUTurns(P, cs, w, isHole) {
@@ -846,7 +939,11 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       const t = (r[0] * L2.d[1] - r[1] * L2.d[0]) / den;
       return addv(L1.m, mul(L1.d, t));
     };
-    const arcTo = (a, b, dir) => { let acc = 0, i = a; for (let q = 0; q < n && i !== b; q++) { const j = (i + dir + n) % n; acc += len(sub(P[j], P[i])); i = j; } return acc; };
+    const arcS = arcIndex(P), arcL = arcS[n];
+    const arcTo = (a, b, dir) => {          // arc length from a to b, going forward (+1) or back (-1)
+      const f = ((arcS[b] - arcS[a]) % arcL + arcL) % arcL;
+      return dir > 0 ? f : (f === 0 ? 0 : arcL - f);
+    };
     const us = cs.uturns || [];
     // normal corners on a narrow end are replaced by the end's two corners
     const covered = new Set();
@@ -912,11 +1009,36 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       const k0 = Math.floor(capPts.length * 0.3), k1 = Math.ceil(capPts.length * 0.7);
       const mid = capPts.slice(k0, Math.max(k1, k0 + 2));
       let C = fitLine(mid);
+      // the flat top touches its convex hull along one edge: that edge gives
+      // the cap's true direction even when both of its corners are rounded off
+      {
+        const H = hull2d(capPts);
+        let best = null, bs = -Infinity;
+        for (let k = 0; k < H.length; k++) {
+          const a = H[k], b = H[(k + 1) % H.length], e = sub(b, a), L = len(e);
+          if (L < 1.5) continue;
+          const isChord = (q, r) => (q === capPts[0] || q[0] === capPts[0][0] && q[1] === capPts[0][1]) &&
+                                    (r[0] === capPts[capPts.length - 1][0] && r[1] === capPts[capPts.length - 1][1]);
+          if (isChord(a, b) || isChord(b, a)) continue;              // the open side of the end, not its top
+          const nrm = [e[1] / L, -e[0] / L];
+          if (Math.abs(dot(nrm, uo)) < 0.6) continue;
+          // the outermost such edge (furthest out along the end's direction)
+          const sc = dot(sub(mul(addv(a, b), 0.5), P[c]), uo);
+          if (best === null || sc > bs) { bs = sc; best = { m: mul(addv(a, b), 0.5), d: norm(e), spread: L }; }
+        }
+        if (best) C = best;
+      }
       if (C.spread < 1.0 || Math.abs(dot(C.d, uo)) > 0.7) {
         const maxp = Math.max(...capPts.map(q => dot(sub(q, P[c]), uo)));
         const top = capPts.filter(q => dot(sub(q, P[c]), uo) > maxp - 0.6);
         C = fitLine(top.length >= 2 ? top : mid);
         if (C.spread < 1.0) C = { m: C.m, d: [-uo[1], uo[0]] };
+      }
+      // ends of strokes are nearly always level or upright: a cap within 16°
+      // of that is made exactly level / upright
+      {
+        const ang = Math.atan2(C.d[1], C.d[0]), q = Math.round(ang / (Math.PI / 2)) * (Math.PI / 2);
+        if (Math.abs(ang - q) < 16 * Math.PI / 180) C = { m: C.m, d: [Math.round(Math.cos(q)), Math.round(Math.sin(q))], spread: C.spread };
       }
       const XA = cross(C, A), XB = cross(C, B);
       if (!XA || !XB || len(sub(XA, P[c])) > 7 || len(sub(XB, P[c])) > 7) continue;
@@ -1068,12 +1190,27 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   // a real straight edge: the points scatter on both sides of the chord; an arc
   // (even a flat one) bends to one side all the way
   function isStraight(d, a, b, lineTol, minRun) {
+    // a real straight edge: the points scatter evenly around the best-fit
+    // line; an arc (even a flat one) bows - its middle lies to one side of
+    // the line and its two ends to the other
     const A = d[a], B = d[b], L = len(sub(B, A));
-    if (L < minRun) return false;
-    const nx = -(B[1] - A[1]) / L, ny = (B[0] - A[0]) / L;
-    let sum = 0;
-    for (let i = a + 1; i < b; i++) sum += (d[i][0] - A[0]) * nx + (d[i][1] - A[1]) * ny;
-    return Math.abs(sum / Math.max(1, b - a - 1)) < 0.25 * lineTol;
+    if (L < minRun || b - a < 4) return false;
+    let sx = 0, sy = 0;
+    for (let i = a; i <= b; i++) { sx += d[i][0]; sy += d[i][1]; }
+    const cnt = b - a + 1, m = [sx / cnt, sy / cnt];
+    let xx = 0, xy = 0, yy = 0;
+    for (let i = a; i <= b; i++) { const dx = d[i][0] - m[0], dy = d[i][1] - m[1]; xx += dx * dx; xy += dx * dy; yy += dy * dy; }
+    const ang = 0.5 * Math.atan2(2 * xy, xx - yy), nx = -Math.sin(ang), ny = Math.cos(ang);
+    let mid = 0, nm = 0, ends = 0, ne = 0, mx = 0;
+    for (let i = a; i <= b; i++) {
+      const r = (d[i][0] - m[0]) * nx + (d[i][1] - m[1]) * ny;
+      mx = Math.max(mx, Math.abs(r));
+      const t = (i - a) / (b - a);
+      if (t > 1 / 3 && t < 2 / 3) { mid += r; nm++; } else { ends += r; ne++; }
+    }
+    if (mx > Math.max(0.45, 1.5 * lineTol)) return false;
+    const bow = Math.abs((nm ? mid / nm : 0) - (ne ? ends / ne : 0));
+    return bow < 0.07;
   }
 
   function simplifyIdx(d, a0, b0, tol) {
@@ -1094,6 +1231,158 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     return keep.sort((x, y) => x - y);
   }
 
+  // a straight segment that remembers the line fitted through all its points
+  function lineSeg(d, a, b) {
+    const seg = [d[a], d[a], d[b], d[b]];
+    if (b - a >= 2) {
+      let sx = 0, sy = 0;
+      for (let i = a; i <= b; i++) { sx += d[i][0]; sy += d[i][1]; }
+      const n = b - a + 1, m = [sx / n, sy / n];
+      let xx = 0, xy = 0, yy = 0;
+      for (let i = a; i <= b; i++) { const dx = d[i][0] - m[0], dy = d[i][1] - m[1]; xx += dx * dx; xy += dx * dy; yy += dy * dy; }
+      const ang = 0.5 * Math.atan2(2 * xy, xx - yy);
+      seg.line = { m, d: [Math.cos(ang), Math.sin(ang)], len: len(sub(d[b], d[a])) };
+    } else {
+      seg.line = { m: mul(addv(d[a], d[b]), 0.5), d: norm(sub(d[b], d[a])), len: len(sub(d[b], d[a])), weak: true };
+    }
+    return seg;
+  }
+
+  // Lines are made exactly straight and exact: nearly level / upright lines
+  // become level / upright, two lines meet where their fitted lines cross,
+  // and a curve that ends on a line ends exactly on it (its handle moves along).
+  function straighten(segs) {
+    const n = segs.length;
+    if (n < 2) return;
+    const isLine = b => !!b.line || (len(sub(b[1], b[0])) < 1e-9 && len(sub(b[2], b[3])) < 1e-9);
+    const snapTol = 1.6 * Math.PI / 180;
+    for (const b of segs) {
+      if (!b.line || b.line.weak) continue;
+      const a = Math.atan2(b.line.d[1], b.line.d[0]);
+      const q = Math.round(a / (Math.PI / 2)) * (Math.PI / 2);
+      if (Math.abs(a - q) < snapTol) b.line.d = [Math.round(Math.cos(q)), Math.round(Math.sin(q))];
+    }
+    const cross2 = (L1, L2) => {
+      const den = L1.d[0] * L2.d[1] - L1.d[1] * L2.d[0];
+      if (Math.abs(den) < 0.08) return null;
+      const r = sub(L2.m, L1.m), t = (r[0] * L2.d[1] - r[1] * L2.d[0]) / den;
+      return addv(L1.m, mul(L1.d, t));
+    };
+    const project = (L, P) => addv(L.m, mul(L.d, dot(sub(P, L.m), L.d)));
+    // a "curve" whose handles lie on its chord is a line
+    for (let k = 0; k < segs.length; k++) {
+      const C = segs[k];
+      if (isLine(C)) continue;
+      const ch = sub(C[3], C[0]), L = len(ch);
+      if (L < 4) continue;
+      const u = mul(ch, 1 / L);
+      const off = q => Math.abs(u[0] * (q[1] - C[0][1]) - u[1] * (q[0] - C[0][0]));
+      const along = q => dot(sub(q, C[0]), u);
+      if (off(C[1]) < 0.15 && off(C[2]) < 0.15 && along(C[1]) >= -0.1 && along(C[2]) <= L + 0.1) {
+        const nl = [C[0], C[0], C[3], C[3]];
+        nl.line = { m: mul(addv(C[0], C[3]), 0.5), d: u, len: L };
+        segs[k] = nl;
+      }
+    }
+    // a line that runs on into a curve which is just as straight: one line
+    const nearLine = (P0, P1, pts, tolL) => {
+      const ch = sub(P1, P0), L = len(ch);
+      if (L < 1e-9) return false;
+      return pts.every(q => Math.abs(ch[0] * (q[1] - P0[1]) - ch[1] * (q[0] - P0[0])) / L < tolL);
+    };
+    const samples = C => [0.2, 0.4, 0.5, 0.6, 0.8].map(t => bez(C, t));
+    for (let k = 0; k < segs.length && segs.length > 2; k++) {
+      const m = segs.length, A = segs[k], C = segs[(k + 1) % m];
+      if (isLine(A) && !isLine(C) && len(sub(A[3], A[0])) > 2) {
+        if (nearLine(A[0], C[3], [A[3], C[3]].concat(samples(C)), 0.75)) {
+          const ns = [A[0], A[0], C[3], C[3]];
+          ns.line = { m: mul(addv(A[0], C[3]), 0.5), d: norm(sub(C[3], A[0])), len: len(sub(C[3], A[0])) };
+          segs[k] = ns; segs.splice((k + 1) % m, 1); if ((k + 1) % m === 0) k--; k--; continue;
+        }
+      }
+      if (!isLine(A) && isLine(C) && len(sub(C[3], C[0])) > 2) {
+        if (nearLine(A[0], C[3], [A[3]].concat(samples(A)), 0.75)) {
+          const ns = [A[0], A[0], C[3], C[3]];
+          ns.line = { m: mul(addv(A[0], C[3]), 0.5), d: norm(sub(C[3], A[0])), len: len(sub(C[3], A[0])) };
+          segs[k] = ns; segs.splice((k + 1) % m, 1); if ((k + 1) % m === 0) k--; k--; continue;
+        }
+      }
+    }
+    // two neighbouring lines in (almost) the same direction are one line
+    for (let k = 0; k < segs.length && segs.length > 3; k++) {
+      const m = segs.length, A = segs[k], B = segs[(k + 1) % m];
+      if (!A.line || !B.line || A.line.weak || B.line.weak) continue;
+      if (Math.abs(dot(A.line.d, B.line.d)) < Math.cos(8 * Math.PI / 180)) continue;
+      {
+        const ch = sub(B[3], A[0]), L = len(ch);
+        const dv = L ? Math.abs(ch[0] * (A[3][1] - A[0][1]) - ch[1] * (A[3][0] - A[0][0])) / L : 0;
+        if (dv > 0.7) continue;                 // a real (gentle) corner
+      }
+      const la = A.line.len, lb = B.line.len;
+      let d2 = B.line.d;
+      if (dot(A.line.d, d2) < 0) d2 = mul(d2, -1);
+      const nd = norm(addv(mul(A.line.d, la), mul(d2, lb)));
+      const nm = mul(addv(mul(A.line.m, la), mul(B.line.m, lb)), 1 / (la + lb));
+      const ns = [A[0], A[0], B[3], B[3]];
+      ns.line = { m: nm, d: nd, len: la + lb };
+      segs[k] = ns;
+      segs.splice((k + 1) % m, 1);
+      if ((k + 1) % m === 0) k--;          // removed the first one: the indices moved
+      k--;
+    }
+    // a short curve squeezed between two lines next to a corner is the
+    // rounded-off corner itself: the two lines meet instead
+    for (let k = 0; k < segs.length && segs.length > 3; k++) {
+      const m = segs.length;
+      const A = segs[(k - 1 + m) % m], C = segs[k], B = segs[(k + 1) % m];
+      if (isLine(C) || !A.line || A.line.weak || !B.line || B.line.weak) continue;
+      if (len(sub(C[3], C[0])) > 12) continue;
+      const X = cross2(A.line, B.line);
+      if (!X) continue;
+      if (Math.min(len(sub(X, C[0])), len(sub(X, C[3]))) > 4.5 || Math.max(len(sub(X, C[0])), len(sub(X, C[3]))) > 13) continue;
+      const nl = [A[0], A[0], X, X]; nl.line = A.line;
+      const nb = [X, X, B[3], B[3]]; nb.line = B.line;
+      segs[(k - 1 + m) % m] = nl;
+      segs[(k + 1) % m] = nb;
+      segs.splice(k, 1);
+      k = Math.max(-1, k - 2);
+    }
+    const n2 = segs.length;
+    const setStart = (b, V) => {
+      const dv = sub(V, b[0]);
+      b[0] = V;
+      b[1] = isLine(b) ? V : addv(b[1], dv);
+    };
+    const setEnd = (b, V) => {
+      const dv = sub(V, b[3]);
+      b[3] = V;
+      b[2] = isLine(b) ? V : addv(b[2], dv);
+    };
+    const moved = new Array(n2);
+    for (let k = 0; k < n2; k++) {
+      const A = segs[(k - 1 + n2) % n2], B = segs[k];
+      const V = B[0];
+      const la = A.line && !A.line.weak ? A.line : null, lb = B.line && !B.line.weak ? B.line : null;
+      let W = null;
+      if (la && lb) {
+        W = cross2(la, lb);
+        if (W && len(sub(W, V)) > 3) W = null;
+        if (!W && Math.abs(la.d[0] * lb.d[1] - la.d[1] * lb.d[0]) < 0.08) W = project(la.len >= lb.len ? la : lb, V);
+      } else if (la || lb) {
+        const L = la || lb;
+        const pr = project(L, V);
+        if (len(sub(pr, V)) < 1.5) W = pr;
+      }
+      moved[k] = W;
+    }
+    for (let k = 0; k < n2; k++) {
+      const W = moved[k];
+      if (!W) continue;
+      setEnd(segs[(k - 1 + n2) % n2], W);
+      setStart(segs[k], W);
+    }
+  }
+
   // an open run of points d[0..last]: straight stretches become lines, the
   // rest Bezier curves that join the lines smoothly (no bulges next to them)
   function fitPiece(d, tS, tE, tol, w, out, openEnds = true) {
@@ -1108,9 +1397,12 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     const lineTol = Math.min(0.3, tol * 0.4), minRun = Math.max(5, Math.min(Math.max(16, 5 * w), 0.4 * ext));
     const idx = simplifyIdx(d, 0, last, lineTol);
     const runs = [];
+    // straight stretches: neighbouring simplified edges are joined as long as
+    // together they are still one straight line
     for (let k = 0; k + 1 < idx.length; k++) {
-      const a = idx[k], b = idx[k + 1];
-      if (isStraight(d, a, b, lineTol, minRun)) runs.push([a, b]);
+      let e = k + 1;
+      while (e + 1 < idx.length && isStraight(d, idx[k], idx[e + 1], lineTol, 0)) e++;
+      if (isStraight(d, idx[k], idx[e], lineTol, minRun)) { runs.push([idx[k], idx[e]]); k = e - 1; }
     }
     // a short leftover next to a corner that lies on the line: part of the line
     const onLine = (a, b, i0, i1) => {
@@ -1131,7 +1423,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     }
     let cur = 0, tIn = tS;
     const curve = (a, b, t1, t2) => {
-      if (b - a < 3) { out.push([d[a], d[a], d[b], d[b]]); return; }
+      if (b - a < 3) { out.push(lineSeg(d, a, b)); return; }
       const ch = sub(d[b], d[a]), chL = len(ch), cd = norm(ch);
       let arc = 0;
       for (let i = a + 1; i <= b; i++) arc += len(sub(d[i], d[i - 1]));
@@ -1139,7 +1431,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       if (arc < 4 * w) {
         let dev = 0;
         for (let i = a + 1; i < b; i++) dev = Math.max(dev, Math.abs(cd[0] * (d[i][1] - d[a][1]) - cd[1] * (d[i][0] - d[a][0])));
-        if (dev < Math.max(0.6, tol * 0.6)) { out.push([d[a], d[a], d[b], d[b]]); return; }
+        if (dev < Math.max(0.6, tol * 0.6)) { out.push(lineSeg(d, a, b)); return; }
       }
       // a tangent handed over from a neighbour that points well away from
       // where this bit goes would bend it into a drop or a loop: then the
@@ -1151,7 +1443,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     for (const [a, b] of runs) {
       const dir = norm(sub(d[b], d[a]));
       if (a > cur) curve(cur, a, tIn, mul(dir, -1));
-      out.push([d[a], d[a], d[b], d[b]]);          // a straight line
+      out.push(lineSeg(d, a, b));                  // a straight line
       cur = b; tIn = dir;
     }
     if (cur < last) curve(cur, last, tIn, tE);
@@ -1343,6 +1635,30 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       const Q = simplify(P, tol);
       return { d: 'M' + Q.map(S).join('L') + 'Z', nodes: Q.length };
     }
+    // a smooth closed shape that is a circle (or an upright ellipse) within
+    // the tolerance is drawn as an exact one: four quarter arcs
+    if (!cs.length && curve !== 'poly') {
+      const E = fitEllipse(P);
+      if (E) {
+        const dev = Math.max(0.35, Math.min(tol * 0.6, 0.04 * Math.min(E.rx, E.ry)));
+        let ok = true;
+        for (const q of P) {
+          const ex = (q[0] - E.cx) / E.rx, ey = (q[1] - E.cy) / E.ry;
+          const r = Math.hypot(ex, ey);
+          if (Math.abs(r - 1) * Math.min(E.rx, E.ry) > dev) { ok = false; break; }
+        }
+        if (ok) {
+          const k = 0.5522847498, { cx, cy, rx, ry } = E;
+          const pt = (x, y) => fmt(x * sx) + ' ' + fmt(y * sy);
+          const d = 'M' + pt(cx + rx, cy) +
+            'C' + pt(cx + rx, cy + k * ry) + ' ' + pt(cx + k * rx, cy + ry) + ' ' + pt(cx, cy + ry) +
+            'C' + pt(cx - k * rx, cy + ry) + ' ' + pt(cx - rx, cy + k * ry) + ' ' + pt(cx - rx, cy) +
+            'C' + pt(cx - rx, cy - k * ry) + ' ' + pt(cx - k * rx, cy - ry) + ' ' + pt(cx, cy - ry) +
+            'C' + pt(cx + k * rx, cy - ry) + ' ' + pt(cx + rx, cy - k * ry) + ' ' + pt(cx + rx, cy) + 'Z';
+          return { d, nodes: 4 };
+        }
+      }
+    }
     // pieces between corners (or the whole loop)
     const pieces = [];
     if (!cs.length) {
@@ -1353,7 +1669,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         const pts = [];
         for (let i = a; ; i = (i + 1) % n) { pts.push(P[i]); if (i === b && pts.length > 1) break; if (pts.length > n + 1) break; }
         const ia = cinfo.get(a), ib = cinfo.get(b);
-        if (ut.straight.has(a + ',' + b)) { pieces.push({ pts: [P[a], P[b]], closed: false }); continue; }
+        if (ut.straight.has(a + ',' + b)) { pieces.push({ pts: [P[a], P[b]], closed: false, cap: true }); continue; }
         pieces.push({ pts: trimNearCorners(pts, w, true, true), closed: false,
                       tS: ia ? ia.tout : null, tE: ib ? ib.tin : null });
       }
@@ -1362,6 +1678,13 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     for (const pc of pieces) {
       const d = pc.pts, last = d.length - 1;
       if (last < 1) continue;
+      if (pc.cap) {
+        // the flat end of a stroke: an exact line (already level / upright)
+        const sg = [d[0], d[0], d[last], d[last]];
+        sg.line = { m: mul(addv(d[0], d[last]), 0.5), d: norm(sub(d[last], d[0])), len: len(sub(d[last], d[0])) };
+        segs.push(sg);
+        continue;
+      }
       if (curve === 'spline') {
         if (pc.closed) {
           const Q = simplify(d.slice(0, -1), tol);
@@ -1395,6 +1718,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     }
     if (!segs.length) return { d: '', nodes: 0 };
     if (o.thin > 0 && curve !== 'poly') thinSegments(segs, o.thin, tol, corner);
+    straighten(segs);
     let path = 'M' + S(segs[0][0]);
     for (const b of segs) {
       const straight = len(sub(b[1], b[0])) < 1e-9 && len(sub(b[2], b[3])) < 1e-9;
@@ -1619,7 +1943,30 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       }
       blur121(field, fw, fh);
       let loops = contours(field, fw, fh, x0, y0);
-      loops = loops.filter(L => {
+      loops = loops.filter(L => Math.abs(area(L)) >= Math.max(speck, 0.5));
+      // a loop inside an odd number of others is a hole (even-odd fill)
+      const inside = (pt, Q) => {
+        let c = false;
+        for (let i = 0, j = Q.length - 1; i < Q.length; j = i++) {
+          if ((Q[i][1] > pt[1]) !== (Q[j][1] > pt[1]) &&
+              pt[0] < (Q[j][0] - Q[i][0]) * (pt[1] - Q[i][1]) / (Q[j][1] - Q[i][1]) + Q[i][0]) c = !c;
+        }
+        return c;
+      };
+      const boxes = loops.map(Q => { let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity; for (const q of Q) { if (q[0] < a) a = q[0]; if (q[1] < b) b = q[1]; if (q[0] > c) c = q[0]; if (q[1] > e) e = q[1]; } return [a, b, c, e]; });
+      let holes = loops.map((Q, k) => {
+        let depth = 0;
+        const pt = Q[0];
+        for (let m = 0; m < loops.length; m++) {
+          if (m === k) continue;
+          const bx = boxes[m];
+          if (pt[0] < bx[0] || pt[0] > bx[2] || pt[1] < bx[1] || pt[1] > bx[3]) continue;
+          if (inside(pt, loops[m])) depth++;
+        }
+        return depth % 2 === 1;
+      });
+      const keepIdx = loops.map((L, k) => k).filter(k => {
+        const L = loops[k];
         const A2 = Math.abs(area(L));
         if (A2 < Math.max(speck, 0.5)) return false;
         // hair-thin slivers left between colours (under 1 px wide on average)
@@ -1628,7 +1975,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         if (speck > 0 && A2 < 6 * speck && 2 * A2 / per < 1.0) return false;
         // a small piece of a lower layer with none of its own colour inside is
         // only an underlay for the colours above; it can only peek out as a sliver
-        if (j < order.length - 1 && A2 < 2500) {
+        if (j < order.length - 1 && A2 < 2500 && !holes[k]) {
           let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
           for (const q of L) { if (q[0] < bx0) bx0 = q[0]; if (q[0] > bx1) bx1 = q[0]; if (q[1] < by0) by0 = q[1]; if (q[1] > by1) by1 = q[1]; }
           let ownN = 0;
@@ -1648,29 +1995,10 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         }
         return true;
       });
+      holes = keepIdx.map(k => holes[k]);
+      loops = keepIdx.map(k => loops[k]);
       if (!loops.length) continue;
       if (window.__vzDebug) window.__vzDebug.push({ col: hex(fill[own]), loops, opts, findCorners, loopToPath, relax, splitUTurns, relaxPinned });
-      // a loop inside an odd number of others is a hole (even-odd fill)
-      const inside = (pt, Q) => {
-        let c = false;
-        for (let i = 0, j = Q.length - 1; i < Q.length; j = i++) {
-          if ((Q[i][1] > pt[1]) !== (Q[j][1] > pt[1]) &&
-              pt[0] < (Q[j][0] - Q[i][0]) * (pt[1] - Q[i][1]) / (Q[j][1] - Q[i][1]) + Q[i][0]) c = !c;
-        }
-        return c;
-      };
-      const boxes = loops.map(Q => { let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity; for (const q of Q) { if (q[0] < a) a = q[0]; if (q[1] < b) b = q[1]; if (q[0] > c) c = q[0]; if (q[1] > e) e = q[1]; } return [a, b, c, e]; });
-      const holes = loops.map((Q, k) => {
-        let depth = 0;
-        const pt = Q[0];
-        for (let m = 0; m < loops.length; m++) {
-          if (m === k) continue;
-          const bx = boxes[m];
-          if (pt[0] < bx[0] || pt[0] > bx[2] || pt[1] < bx[1] || pt[1] > bx[3]) continue;
-          if (inside(pt, loops[m])) depth++;
-        }
-        return depth % 2 === 1;
-      });
       let d = '';
       for (let k = 0; k < loops.length; k++) {
         const L = loops[k];
