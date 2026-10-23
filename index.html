@@ -1,0 +1,902 @@
+<title>Векторизатор PNG</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600&family=Unbounded:wght@500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a drafting bench - settings rail on the left, a large tracing stage on the right
+   with a split view (original | vector) like tracing paper laid over a drawing. */
+:root {
+  --bg: #e9ecf0;
+  --panel: #ffffff;
+  --panel-2: #f4f6f9;
+  --line: #d3d9e2;
+  --fg: #151a22;
+  --muted: #5d6676;
+  --accent: #2f55d4;
+  --accent-ink: #ffffff;
+  --node: #e2570f;
+  --check-a: #ffffff;
+  --check-b: #e3e7ed;
+  --ok: #1f8a4c;
+  --warn: #a76200;
+  --font-display: "Unbounded", "Onest", system-ui, sans-serif;
+  --font-body: "Onest", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  --r: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --panel: #161a21; --panel-2: #1c212a; --line: #2a313c; --fg: #e6e9ef;
+    --muted: #97a0b0; --accent: #7d95ff; --accent-ink: #0e1116; --node: #ff8a4c;
+    --check-a: #222730; --check-b: #1a1e25; --ok: #4cc98a; --warn: #f0b04a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1116; --panel: #161a21; --panel-2: #1c212a; --line: #2a313c; --fg: #e6e9ef;
+  --muted: #97a0b0; --accent: #7d95ff; --accent-ink: #0e1116; --node: #ff8a4c;
+  --check-a: #222730; --check-b: #1a1e25; --ok: #4cc98a; --warn: #f0b04a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 14px; line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 24px;
+}
+.app { max-width: 1400px; margin: 0 auto; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; justify-content: space-between; }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 20px; letter-spacing: -0.01em; margin: 0; text-wrap: balance; }
+h1 small { font-family: var(--font-mono); font-weight: 400; font-size: 12px; color: var(--muted); margin-left: 8px; letter-spacing: 0; }
+.head-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn {
+  font: 500 14px var(--font-body); border-radius: 8px; padding: 8px 14px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel); color: var(--fg);
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn:focus-visible, input:focus-visible, select:focus-visible, .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn[disabled] { opacity: .5; cursor: default; }
+.main { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 820px) { .main { grid-template-columns: minmax(0, 1fr); } }
+.rail { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 14px; display: grid; gap: 14px; }
+.drop {
+  display: block;
+  border: 1.5px dashed var(--line); border-radius: 8px; padding: 14px; text-align: center; cursor: pointer;
+  background: var(--panel-2); color: var(--muted); font-size: 13px;
+}
+.drop strong { display: block; color: var(--fg); font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.drop.over { border-color: var(--accent); color: var(--fg); }
+.file-name { font-family: var(--font-mono); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+fieldset { border: 0; margin: 0; padding: 0; display: grid; gap: 10px; }
+legend { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; margin-bottom: 8px; padding: 0; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { text-align: center; padding: 7px 6px; cursor: pointer; font-weight: 500; }
+.seg input:checked + label { background: var(--accent); color: var(--accent-ink); }
+.seg input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ctl { display: grid; gap: 4px; }
+.ctl .top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.ctl .top span:first-child { font-weight: 500; }
+.val { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.hint { font-size: 12px; color: var(--muted); }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.check { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.check input { margin-top: 3px; accent-color: var(--accent); }
+input[type=color] { width: 40px; height: 28px; border: 1px solid var(--line); border-radius: 6px; padding: 0; background: var(--panel); }
+select { font: 14px var(--font-body); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
+.palette { display: flex; flex-wrap: wrap; gap: 4px; }
+.palette i { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line); display: block; }
+
+.bench { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); display: grid; min-width: 0; }
+.bench-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab { font: 500 13px var(--font-body); padding: 6px 12px; border-radius: 6px; border: 1px solid transparent; background: none; color: var(--muted); cursor: pointer; }
+.tab[aria-selected=true] { background: var(--panel-2); color: var(--fg); border-color: var(--line); }
+.stage-wrap { overflow: auto; max-height: 72vh; min-height: 320px; position: relative; }
+.stage {
+  position: relative; margin: 0 auto;
+  background-color: var(--check-a);
+  background-image: conic-gradient(var(--check-b) 25%, transparent 0 50%, var(--check-b) 0 75%, transparent 0);
+  background-size: 16px 16px;
+}
+.stage > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+.stage img { object-fit: fill; }
+.stage.px img { image-rendering: pixelated; }
+.stage svg { display: block; }
+.divider { width: 2px !important; left: 50%; background: var(--accent); pointer-events: none; }
+.divider::after {
+  content: "ИСХОДНИК  |  ВЕКТОР"; position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  white-space: nowrap; font: 500 10px var(--font-mono); letter-spacing: .08em; background: var(--accent); color: var(--accent-ink);
+  padding: 3px 7px; border-radius: 4px;
+}
+.split-ctl { padding: 8px 12px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+.split-ctl input { flex: 1; }
+.stats { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 12px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.stats b { color: var(--fg); font-weight: 500; }
+.status { font-size: 13px; color: var(--muted); min-height: 1.4em; }
+.status.busy::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 8px; animation: pulse 1s infinite; }
+.status.warn { color: var(--warn); }
+@keyframes pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .status.busy::before { animation: none; } }
+details.code { border-top: 1px solid var(--line); padding: 10px 12px; }
+details.code summary { cursor: pointer; font-weight: 500; }
+textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(--font-mono); background: var(--panel-2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: vertical; }
+.badge { font: 500 11px var(--font-mono); padding: 2px 7px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); }
+</style>
+
+<div class="app">
+  <header>
+    <h1>Векторизатор PNG <small>PNG → SVG</small></h1>
+    <div class="head-actions">
+      <button class="btn" id="copyBtn" type="button">Копировать SVG</button>
+      <button class="btn primary" id="saveBtn" type="button" hidden>Скачать SVG</button>
+    </div>
+  </header>
+
+  <div class="main">
+    <aside class="rail">
+      <div>
+        <label class="drop" id="drop" tabindex="0" for="file">
+          <strong>Загрузить PNG</strong>
+          Перетащите файл сюда или нажмите. Прозрачные области останутся прозрачными.
+        </label>
+        <input type="file" id="file" accept="image/png,image/webp,image/gif,image/jpeg" hidden>
+        <div class="row" style="margin-top:8px; justify-content: space-between;">
+          <span class="file-name" id="fileName">пример.png</span>
+          <span class="badge" id="sizeBadge"></span>
+        </div>
+      </div>
+
+      <fieldset>
+        <legend>Режим</legend>
+        <div class="seg" role="radiogroup">
+          <input type="radio" name="mode" id="modeColor" value="color" checked><label for="modeColor">Цвета</label>
+          <input type="radio" name="mode" id="modeMono" value="mono"><label for="modeMono">Силуэт</label>
+        </div>
+        <div class="ctl" id="colorsCtl">
+          <div class="top"><span>Количество цветов</span><span class="val" id="colorsVal"></span></div>
+          <input type="range" id="colors" min="2" max="32" step="1" value="8">
+          <div class="palette" id="palette"></div>
+        </div>
+        <div class="ctl" id="monoCtl" hidden>
+          <label class="check"><input type="checkbox" id="monoOwn"> <span>Свой цвет заливки</span></label>
+          <div class="row"><input type="color" id="monoColor" value="#151a22"><span class="hint">иначе средний цвет картинки</span></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Контур</legend>
+        <div class="ctl">
+          <div class="top"><span>Порог прозрачности</span><span class="val" id="alphaVal"></span></div>
+          <input type="range" id="alpha" min="5" max="95" step="1" value="50">
+          <span class="hint">Пиксели прозрачнее порога не попадают в контур.</span>
+        </div>
+        <div class="ctl">
+          <div class="top"><span>Упрощение</span><span class="val" id="tolVal"></span></div>
+          <input type="range" id="tol" min="0.1" max="4" step="0.1" value="0.8">
+          <span class="hint">Допуск отклонения в пикселях. Больше = меньше узлов.</span>
+        </div>
+        <div class="ctl">
+          <div class="top"><span>Сглаживание</span><span class="val" id="smoothVal"></span></div>
+          <input type="range" id="smooth" min="0" max="1" step="0.05" value="0.8">
+        </div>
+        <div class="ctl">
+          <div class="top"><span>Острые углы от</span><span class="val" id="cornerVal"></span></div>
+          <input type="range" id="corner" min="10" max="150" step="5" value="55">
+          <span class="hint">Изломы круче этого угла остаются острыми.</span>
+        </div>
+        <div class="ctl">
+          <div class="top"><span>Убрать мелочь до</span><span class="val" id="speckVal"></span></div>
+          <input type="range" id="speck" min="0" max="400" step="2" value="12">
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Изображение</legend>
+        <label class="check"><input type="checkbox" id="bgRemove"> <span>Убрать однотонный фон<br><span class="hint">для картинок без прозрачности: фон от краёв заливкой</span></span></label>
+        <div class="ctl" id="bgTolCtl" hidden>
+          <div class="top"><span>Допуск фона</span><span class="val" id="bgTolVal"></span></div>
+          <input type="range" id="bgTol" min="2" max="60" step="1" value="14">
+        </div>
+        <div class="ctl">
+          <div class="top"><span>Макс. размер для обработки</span></div>
+          <select id="maxSide">
+            <option value="800">800 px — быстро</option>
+            <option value="1600" selected>1600 px</option>
+            <option value="3000">3000 px — детально</option>
+          </select>
+        </div>
+      </fieldset>
+    </aside>
+
+    <section class="bench" aria-label="Предпросмотр">
+      <div class="bench-bar">
+        <div class="tabs" role="tablist">
+          <button class="tab" role="tab" id="tabSplit" aria-selected="true" type="button">Сравнение</button>
+          <button class="tab" role="tab" id="tabVector" aria-selected="false" type="button">Вектор</button>
+          <button class="tab" role="tab" id="tabOutline" aria-selected="false" type="button">Контуры и узлы</button>
+        </div>
+        <div class="row">
+          <span class="status" id="status" role="status"></span>
+          <select id="zoom" aria-label="Масштаб">
+            <option value="fit" selected>Вписать</option>
+            <option value="1">100%</option>
+            <option value="2">200%</option>
+            <option value="4">400%</option>
+          </select>
+        </div>
+      </div>
+      <div class="stage-wrap" id="stageWrap">
+        <div class="stage" id="stage">
+          <img id="orig" alt="Исходное изображение">
+          <div id="vec"></div>
+          <div class="divider" id="divider"></div>
+        </div>
+      </div>
+      <div class="split-ctl" id="splitCtl">
+        <span class="hint">Исходник</span>
+        <input type="range" id="split" min="0" max="100" value="50" aria-label="Положение разделителя">
+        <span class="hint">Вектор</span>
+      </div>
+      <div class="stats" id="stats"></div>
+      <details class="code">
+        <summary>SVG-код</summary>
+        <textarea id="code" readonly spellcheck="false"></textarea>
+      </details>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const ui = {
+    mode: () => document.querySelector('input[name=mode]:checked').value,
+    colors: $('colors'), alpha: $('alpha'), tol: $('tol'), smooth: $('smooth'), corner: $('corner'),
+    speck: $('speck'), bgRemove: $('bgRemove'), bgTol: $('bgTol'), maxSide: $('maxSide'),
+    monoOwn: $('monoOwn'), monoColor: $('monoColor'),
+  };
+  let src = null;          // {img, name, w, h}
+  let prep = null;         // {W, H, data, scale, key}
+  let result = null;       // {svg, outline, stats}
+  let view = 'split';
+  let downloads = null;
+  let runId = 0;
+
+  // ---------- labels for the sliders ----------
+  function syncLabels() {
+    $('colorsVal').textContent = ui.colors.value;
+    $('alphaVal').textContent = ui.alpha.value + '%';
+    $('tolVal').textContent = Number(ui.tol.value).toFixed(1) + ' px';
+    $('smoothVal').textContent = Math.round(ui.smooth.value * 100) + '%';
+    $('cornerVal').textContent = ui.corner.value + '°';
+    $('speckVal').textContent = ui.speck.value + ' px²';
+    $('bgTolVal').textContent = ui.bgTol.value;
+    const mono = ui.mode() === 'mono';
+    $('colorsCtl').hidden = mono;
+    $('monoCtl').hidden = !mono;
+    $('bgTolCtl').hidden = !ui.bgRemove.checked;
+  }
+
+  function setStatus(text, cls) {
+    const s = $('status'); s.textContent = text; s.className = 'status' + (cls ? ' ' + cls : '');
+  }
+
+  // ---------- sample image (drawn here, flat colours + anti-aliased edges) ----------
+  function sampleImage() {
+    const c = document.createElement('canvas'); c.width = 520; c.height = 520;
+    const g = c.getContext('2d');
+    g.translate(260, 260);
+    g.fillStyle = '#1f3a5f'; g.beginPath(); g.arc(0, 0, 230, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#f2c14e'; g.beginPath(); g.arc(70, -70, 52, 0, Math.PI * 2); g.fill();
+    g.save(); g.beginPath(); g.arc(0, 0, 230, 0, Math.PI * 2); g.clip();
+    g.fillStyle = '#7fb7be';
+    g.beginPath(); g.moveTo(-260, 120); g.lineTo(-120, -40); g.lineTo(-40, 50); g.lineTo(40, -10); g.lineTo(260, 140); g.lineTo(260, 260); g.lineTo(-260, 260); g.fill();
+    g.fillStyle = '#eef2f3';
+    g.beginPath(); g.moveTo(-120, -40); g.lineTo(-80, 6); g.lineTo(-100, 0); g.lineTo(-120, 18); g.lineTo(-140, -18); g.fill();
+    g.fillStyle = '#2d6a4f';
+    g.beginPath(); g.moveTo(-260, 170);
+    for (let x = -260; x <= 260; x += 20) g.lineTo(x, 150 + 18 * Math.sin(x / 40));
+    g.lineTo(260, 260); g.lineTo(-260, 260); g.fill();
+    g.restore();
+    g.strokeStyle = '#e4572e'; g.lineWidth = 14; g.beginPath(); g.arc(0, 0, 238, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = '#ffffff'; g.font = '600 46px Onest, system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText('ВЕРШИНА', 0, 215 - 20);
+    return c.toDataURL('image/png');
+  }
+
+  function loadFrom(url, name) {
+    const img = new Image();
+    img.onload = () => {
+      src = { img, name, w: img.naturalWidth, h: img.naturalHeight };
+      $('fileName').textContent = name;
+      $('sizeBadge').textContent = img.naturalWidth + '×' + img.naturalHeight;
+      $('orig').src = url;
+      prep = null;
+      const transparent = hasTransparency();
+      ui.bgRemove.checked = !transparent && cornersUniform();
+      syncLabels();
+      if (!transparent) {
+        setStatus(ui.bgRemove.checked ? 'В файле нет прозрачности: фон убирается по цвету краёв.'
+                                      : 'В файле нет прозрачности: фон станет частью рисунка.', 'warn');
+      }
+      layoutStage();
+      schedule(0);
+    };
+    img.onerror = () => setStatus('Не удалось открыть файл. Нужен PNG, WebP, GIF или JPEG.', 'warn');
+    img.src = url;
+  }
+
+  // ---------- prepare pixels ----------
+  function getPrep() {
+    const maxSide = +ui.maxSide.value;
+    const key = src.name + '|' + maxSide + '|' + src.img.src.length;
+    if (prep && prep.key === key) return prep;
+    const scale = Math.min(1, maxSide / Math.max(src.w, src.h));
+    const W = Math.max(1, Math.round(src.w * scale)), H = Math.max(1, Math.round(src.h * scale));
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(src.img, 0, 0, W, H);
+    const data = g.getImageData(0, 0, W, H).data;
+    prep = { W, H, data, sx: src.w / W, sy: src.h / H, key };
+    return prep;
+  }
+  function hasTransparency() {
+    const p = getPrep(); const d = p.data;
+    for (let i = 3; i < d.length; i += 4 * 7) if (d[i] < 250) return true;
+    return false;
+  }
+  function cornersUniform() {
+    const p = getPrep(), d = p.data, W = p.W, H = p.H;
+    const idx = [0, W - 1, (H - 1) * W, H * W - 1].map(i => i * 4);
+    const c0 = idx[0];
+    return idx.every(i => Math.abs(d[i] - d[c0]) + Math.abs(d[i + 1] - d[c0 + 1]) + Math.abs(d[i + 2] - d[c0 + 2]) < 30);
+  }
+
+  // alpha 0..1 per pixel, background removed by flood fill from the borders if asked
+  function alphaField(p) {
+    const { W, H, data } = p;
+    const A = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) A[i] = data[i * 4 + 3] / 255;
+    if (!ui.bgRemove.checked) return A;
+    const tol = +ui.bgTol.value * 3;
+    // background colour: median of the border pixels
+    const rs = [], gs = [], bs = [];
+    for (let x = 0; x < W; x += Math.max(1, W >> 6)) for (const y of [0, H - 1]) { const i = (y * W + x) * 4; rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]); }
+    for (let y = 0; y < H; y += Math.max(1, H >> 6)) for (const x of [0, W - 1]) { const i = (y * W + x) * 4; rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]); }
+    const med = a => a.sort((u, v) => u - v)[a.length >> 1];
+    const br = med(rs), bgc = med(gs), bb = med(bs);
+    const dist = i => Math.abs(data[i * 4] - br) + Math.abs(data[i * 4 + 1] - bgc) + Math.abs(data[i * 4 + 2] - bb);
+    const seen = new Uint8Array(W * H);
+    const stack = new Int32Array(W * H);
+    let sp = 0;
+    const push = i => { if (!seen[i] && dist(i) <= tol) { seen[i] = 1; stack[sp++] = i; } };
+    for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
+    for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
+    while (sp) {
+      const i = stack[--sp]; const x = i % W, y = (i / W) | 0;
+      if (x > 0) push(i - 1); if (x < W - 1) push(i + 1);
+      if (y > 0) push(i - W); if (y < H - 1) push(i + W);
+    }
+    for (let i = 0; i < W * H; i++) {
+      if (seen[i]) A[i] = 0;
+      else if (dist(i) <= tol * 1.6) {
+        // soft edge next to the removed background
+        const x = i % W, y = (i / W) | 0;
+        if ((x > 0 && seen[i - 1]) || (x < W - 1 && seen[i + 1]) || (y > 0 && seen[i - W]) || (y < H - 1 && seen[i + W])) A[i] *= 0.5;
+      }
+    }
+    return A;
+  }
+
+  // ---------- colours ----------
+  function colourDist(r1, g1, b1, r2, g2, b2) {
+    const rm = (r1 + r2) / 2, dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+    return (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
+  }
+  function palette(p, A, k) {
+    const { W, H, data } = p, N = W * H;
+    // exact palette when the picture has few flat colours
+    const exact = new Map();
+    let opaque = 0;
+    for (let i = 0; i < N; i++) {
+      if (A[i] < 0.9) continue;
+      opaque++;
+      const key = (data[i * 4] << 16) | (data[i * 4 + 1] << 8) | data[i * 4 + 2];
+      exact.set(key, (exact.get(key) || 0) + 1);
+      if (exact.size > 4096) break;
+    }
+    if (exact.size <= 4096) {
+      const top = [...exact.entries()].sort((a, b) => b[1] - a[1]);
+      const covered = top.slice(0, k).reduce((s, e) => s + e[1], 0);
+      if (top.length <= k || covered > 0.985 * opaque) {
+        const cs = top.slice(0, k).map(([c]) => [c >> 16, (c >> 8) & 255, c & 255]);
+        if (cs.length) return cs;
+      }
+    }
+    // k-means++ on a sample of opaque pixels
+    const idx = [];
+    const step = Math.max(1, Math.floor(N / 40000));
+    for (let i = (step >> 1); i < N; i += step) if (A[i] >= 0.5) idx.push(i);
+    if (!idx.length) return [[0, 0, 0]];
+    const S = idx.length, px = new Float32Array(S * 3);
+    idx.forEach((i, j) => { px[j * 3] = data[i * 4]; px[j * 3 + 1] = data[i * 4 + 1]; px[j * 3 + 2] = data[i * 4 + 2]; });
+    let rnd = 12345; const rand = () => (rnd = (rnd * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    const C = [];
+    const dmin = new Float64Array(S).fill(Infinity);
+    let pick = Math.floor(rand() * S);
+    while (C.length < k) {
+      C.push([px[pick * 3], px[pick * 3 + 1], px[pick * 3 + 2]]);
+      const c = C[C.length - 1]; let sum = 0;
+      for (let j = 0; j < S; j++) {
+        const d = colourDist(px[j * 3], px[j * 3 + 1], px[j * 3 + 2], c[0], c[1], c[2]);
+        if (d < dmin[j]) dmin[j] = d; sum += dmin[j];
+      }
+      if (sum <= 0) break;
+      let r = rand() * sum; pick = 0;
+      for (let j = 0; j < S; j++) { r -= dmin[j]; if (r <= 0) { pick = j; break; } }
+    }
+    const lab = new Int32Array(S);
+    for (let it = 0; it < 14; it++) {
+      const acc = C.map(() => [0, 0, 0, 0]);
+      for (let j = 0; j < S; j++) {
+        let best = 0, bd = Infinity;
+        for (let c = 0; c < C.length; c++) {
+          const d = colourDist(px[j * 3], px[j * 3 + 1], px[j * 3 + 2], C[c][0], C[c][1], C[c][2]);
+          if (d < bd) { bd = d; best = c; }
+        }
+        lab[j] = best; const a = acc[best]; a[0] += px[j * 3]; a[1] += px[j * 3 + 1]; a[2] += px[j * 3 + 2]; a[3]++;
+      }
+      let moved = 0;
+      for (let c = 0; c < C.length; c++) if (acc[c][3]) {
+        const n = [acc[c][0] / acc[c][3], acc[c][1] / acc[c][3], acc[c][2] / acc[c][3]];
+        moved += Math.abs(n[0] - C[c][0]) + Math.abs(n[1] - C[c][1]) + Math.abs(n[2] - C[c][2]);
+        C[c] = n;
+      }
+      if (moved < 0.5) break;
+    }
+    // anti-aliased edges between two colours form small "blend" clusters
+    // (a thin ring around every shape); drop them so edge pixels go to the
+    // nearer of the two real colours and the border falls in the middle
+    const share = new Float64Array(C.length);
+    for (let j = 0; j < S; j++) share[lab[j]] += 1 / S;
+    let alive = C.map((c, i) => i).filter(i => share[i] > 0);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const small = alive.filter(i => share[i] < 0.04).sort((a, b) => share[a] - share[b]);
+      for (const c of small) {
+        const big = alive.filter(i => i !== c && share[i] > share[c]);
+        let blend = false;
+        for (let x = 0; x < big.length && !blend; x++) for (let y = x + 1; y < big.length && !blend; y++) {
+          const a = C[big[x]], b = C[big[y]], p = C[c];
+          const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+          const L2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2;
+          if (L2 < 1) continue;
+          const t = (ab[0] * ap[0] + ab[1] * ap[1] + ab[2] * ap[2]) / L2;
+          if (t < 0.06 || t > 0.94) continue;
+          const d = Math.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
+          if (d < 14 + 0.06 * Math.sqrt(L2)) blend = true;
+        }
+        if (blend) { alive = alive.filter(i => i !== c); changed = true; break; }
+      }
+    }
+    return alive.map(i => C[i].map(Math.round));
+  }
+
+  // ---------- marching squares on a soft field, sub-pixel contour ----------
+  function contours(field, fw, fh, ox, oy, T = 0.5) {
+    // field: (fw x fh) samples at pixel centres, already padded by a ring of zeros.
+    // sample (u, v) sits at image coordinates (ox + u - 0.5, oy + v - 0.5)
+    const nb = new Map();
+    const pt = new Map();
+    const link = (a, b) => {
+      let x = nb.get(a); if (x) x.push(b); else nb.set(a, [b]);
+      x = nb.get(b); if (x) x.push(a); else nb.set(b, [a]);
+    };
+    const hKey = (u, v) => (v * fw + u) * 2, vKey = (u, v) => (v * fw + u) * 2 + 1;
+    const hPt = (u, v, a, b) => { const k = hKey(u, v); if (!pt.has(k)) { const t = (T - a) / (b - a); pt.set(k, [ox + u + t - 0.5, oy + v - 0.5]); } return k; };
+    const vPt = (u, v, a, b) => { const k = vKey(u, v); if (!pt.has(k)) { const t = (T - a) / (b - a); pt.set(k, [ox + u - 0.5, oy + v + t - 0.5]); } return k; };
+    for (let v = 0; v < fh - 1; v++) {
+      const r0 = v * fw, r1 = r0 + fw;
+      for (let u = 0; u < fw - 1; u++) {
+        const tl = field[r0 + u], tr = field[r0 + u + 1], br = field[r1 + u + 1], bl = field[r1 + u];
+        const c = (tl > T ? 8 : 0) | (tr > T ? 4 : 0) | (br > T ? 2 : 0) | (bl > T ? 1 : 0);
+        if (c === 0 || c === 15) continue;
+        const Tt = () => hPt(u, v, tl, tr), Bt = () => hPt(u, v + 1, bl, br);
+        const Lt = () => vPt(u, v, tl, bl), Rt = () => vPt(u + 1, v, tr, br);
+        switch (c) {
+          case 1: case 14: link(Lt(), Bt()); break;
+          case 2: case 13: link(Bt(), Rt()); break;
+          case 3: case 12: link(Lt(), Rt()); break;
+          case 4: case 11: link(Tt(), Rt()); break;
+          case 6: case 9: link(Tt(), Bt()); break;
+          case 7: case 8: link(Tt(), Lt()); break;
+          case 5: {
+            const centre = (tl + tr + br + bl) / 4 > T;
+            if (centre) { link(Tt(), Lt()); link(Bt(), Rt()); } else { link(Tt(), Rt()); link(Lt(), Bt()); }
+            break;
+          }
+          case 10: {
+            const centre = (tl + tr + br + bl) / 4 > T;
+            if (centre) { link(Tt(), Rt()); link(Lt(), Bt()); } else { link(Tt(), Lt()); link(Bt(), Rt()); }
+            break;
+          }
+        }
+      }
+    }
+    const loops = [];
+    const done = new Set();
+    for (const start of nb.keys()) {
+      if (done.has(start)) continue;
+      const loop = [];
+      let prev = -1, cur = start;
+      while (true) {
+        done.add(cur);
+        loop.push(pt.get(cur));
+        const ns = nb.get(cur);
+        const next = ns[0] !== prev ? ns[0] : ns[1];
+        prev = cur; cur = next;
+        if (cur === start || cur === undefined || done.has(cur)) break;
+      }
+      if (loop.length >= 3) loops.push(loop);
+    }
+    return loops;
+  }
+
+  // light [1 2 1] blur: hard colour borders become ramps, so the contour
+  // follows them smoothly instead of in pixel steps
+  function blur121(f, w, h) {
+    const t = new Float32Array(f.length);
+    for (let y = 0; y < h; y++) {
+      const r = y * w;
+      for (let x = 0; x < w; x++) {
+        const a = f[r + Math.max(0, x - 1)], b = f[r + x], c = f[r + Math.min(w - 1, x + 1)];
+        t[r + x] = (a + 2 * b + c) / 4;
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      const up = Math.max(0, y - 1) * w, r = y * w, dn = Math.min(h - 1, y + 1) * w;
+      for (let x = 0; x < w; x++) f[r + x] = (t[up + x] + 2 * t[r + x] + t[dn + x]) / 4;
+    }
+  }
+
+  // smooth the contour points a little (removes the last pixel steps)
+  function relax(loop, n) {
+    let P = loop;
+    const m = P.length;
+    if (m < 8) return P;
+    for (let k = 0; k < n; k++) {
+      const Q = new Array(m);
+      for (let i = 0; i < m; i++) {
+        const a = P[(i - 1 + m) % m], b = P[i], c = P[(i + 1) % m];
+        Q[i] = [0.25 * a[0] + 0.5 * b[0] + 0.25 * c[0], 0.25 * a[1] + 0.5 * b[1] + 0.25 * c[1]];
+      }
+      P = Q;
+    }
+    return P;
+  }
+
+  function area(loop) {
+    let s = 0;
+    for (let i = 0, n = loop.length; i < n; i++) { const a = loop[i], b = loop[(i + 1) % n]; s += a[0] * b[1] - b[0] * a[1]; }
+    return s / 2;
+  }
+
+  // Douglas-Peucker on a closed loop
+  function simplify(loop, tol) {
+    const n = loop.length;
+    if (n < 5 || tol <= 0) return loop;
+    let far = 0, fd = -1;
+    for (let i = 1; i < n; i++) { const d = (loop[i][0] - loop[0][0]) ** 2 + (loop[i][1] - loop[0][1]) ** 2; if (d > fd) { fd = d; far = i; } }
+    const keep = new Uint8Array(n); keep[0] = keep[far] = 1;
+    const t2 = tol * tol;
+    const stack = [[0, far], [far, n]];
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      if (b - a < 2) continue;
+      const A = loop[a], B = loop[b % n];
+      const dx = B[0] - A[0], dy = B[1] - A[1], L2 = dx * dx + dy * dy;
+      let best = -1, bd = t2;
+      for (let i = a + 1; i < b; i++) {
+        const P = loop[i];
+        let d;
+        if (L2 < 1e-12) d = (P[0] - A[0]) ** 2 + (P[1] - A[1]) ** 2;
+        else { const c = dx * (P[1] - A[1]) - dy * (P[0] - A[0]); d = c * c / L2; }
+        if (d > bd) { bd = d; best = i; }
+      }
+      if (best >= 0) { keep[best] = 1; stack.push([a, best], [best, b]); }
+    }
+    const out = [];
+    for (let i = 0; i < n; i++) if (keep[i]) out.push(loop[i]);
+    return out.length >= 3 ? out : loop;
+  }
+
+  const fmt = v => { const s = (Math.round(v * 100) / 100).toString(); return s === '-0' ? '0' : s; };
+
+  // closed polygon -> cubic Bezier path, sharp where the turn is steeper than the corner angle
+  function toPath(P, smooth, cornerDeg, sx, sy) {
+    const n = P.length;
+    const X = i => P[(i + n) % n][0] * sx, Y = i => P[(i + n) % n][1] * sy;
+    if (smooth <= 0.001) {
+      let d = 'M' + fmt(X(0)) + ' ' + fmt(Y(0));
+      for (let i = 1; i < n; i++) d += 'L' + fmt(X(i)) + ' ' + fmt(Y(i));
+      return d + 'Z';
+    }
+    const cosLim = Math.cos(cornerDeg * Math.PI / 180);
+    const tx = new Float64Array(n), ty = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const ax = X(i) - X(i - 1), ay = Y(i) - Y(i - 1), bx = X(i + 1) - X(i), by = Y(i + 1) - Y(i);
+      const la = Math.hypot(ax, ay) || 1, lb = Math.hypot(bx, by) || 1;
+      const cos = (ax * bx + ay * by) / (la * lb);
+      if (cos < cosLim) { tx[i] = 0; ty[i] = 0; continue; }     // a corner
+      tx[i] = (X(i + 1) - X(i - 1)) / 2 * smooth;
+      ty[i] = (Y(i + 1) - Y(i - 1)) / 2 * smooth;
+    }
+    let d = 'M' + fmt(X(0)) + ' ' + fmt(Y(0));
+    for (let i = 0; i < n; i++) {
+      const x0 = X(i), y0 = Y(i), x1 = X(i + 1), y1 = Y(i + 1);
+      const L = Math.hypot(x1 - x0, y1 - y0);
+      const clamp = (vx, vy) => { const l = Math.hypot(vx, vy) / 3; const s = l > L * 0.5 ? (L * 0.5) / l : 1; return [vx * s / 3, vy * s / 3]; };
+      const [ax, ay] = clamp(tx[i], ty[i]);
+      const [bx, by] = clamp(tx[(i + 1) % n], ty[(i + 1) % n]);
+      if (!ax && !ay && !bx && !by) d += 'L' + fmt(x1) + ' ' + fmt(y1);
+      else d += 'C' + fmt(x0 + ax) + ' ' + fmt(y0 + ay) + ' ' + fmt(x1 - bx) + ' ' + fmt(y1 - by) + ' ' + fmt(x1) + ' ' + fmt(y1);
+    }
+    return d + 'Z';
+  }
+
+  const hex = c => '#' + c.map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
+  const sleep = () => new Promise(r => setTimeout(r, 0));
+
+  // ---------- the whole trace ----------
+  async function trace(id) {
+    const t0 = performance.now();
+    const p = getPrep();
+    const { W, H, data } = p, N = W * H;
+    const A = alphaField(p);
+    const cut = +ui.alpha.value / 100;
+    const mono = ui.mode() === 'mono';
+    let C, labels = new Int16Array(N).fill(-1);
+    if (mono) {
+      let r = 0, g = 0, b = 0, n = 0;
+      for (let i = 0; i < N; i++) if (A[i] >= cut) { r += data[i * 4]; g += data[i * 4 + 1]; b += data[i * 4 + 2]; n++; }
+      C = [ui.monoOwn.checked ? hexToRgb(ui.monoColor.value) : (n ? [r / n, g / n, b / n].map(Math.round) : [0, 0, 0])];
+      for (let i = 0; i < N; i++) if (A[i] > 0.02) labels[i] = 0;
+    } else {
+      C = palette(p, A, +ui.colors.value);
+      for (let i = 0; i < N; i++) {
+        if (A[i] <= 0.02) continue;
+        const r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+        let best = 0, bd = Infinity;
+        for (let c = 0; c < C.length; c++) { const d = colourDist(r, g, b, C[c][0], C[c][1], C[c][2]); if (d < bd) { bd = d; best = c; } }
+        labels[i] = best;
+      }
+    }
+    if (id !== runId) return null;
+    // count, bounding boxes, average colour per label
+    const K = C.length;
+    const cnt = new Float64Array(K), bb = Array.from({ length: K }, () => [W, H, -1, -1]);
+    const sum = Array.from({ length: K }, () => [0, 0, 0]);
+    for (let i = 0; i < N; i++) {
+      const l = labels[i]; if (l < 0 || A[i] < cut) continue;
+      cnt[l]++; const x = i % W, y = (i / W) | 0, q = bb[l];
+      if (x < q[0]) q[0] = x; if (y < q[1]) q[1] = y; if (x > q[2]) q[2] = x; if (y > q[3]) q[3] = y;
+      sum[l][0] += data[i * 4]; sum[l][1] += data[i * 4 + 1]; sum[l][2] += data[i * 4 + 2];
+    }
+    const fill = C.map((c, l) => mono || !cnt[l] ? c : sum[l].map(v => Math.round(v / cnt[l])));
+    // stacked layers: biggest colour first; each layer also covers the colours drawn above it,
+    // so neighbouring colours never leave hairline gaps
+    const order = [...Array(K).keys()].filter(l => cnt[l] > 0).sort((a, b) => cnt[b] - cnt[a]);
+    const tol = +ui.tol.value, smooth = +ui.smooth.value, corner = +ui.corner.value, speck = +ui.speck.value;
+    const paths = [], outlines = [];
+    let nodes = 0, nPaths = 0;
+    for (let j = 0; j < order.length; j++) {
+      setStatus(`Обработка… слой ${j + 1} из ${order.length}`, 'busy');
+      await sleep();
+      if (id !== runId) return null;
+      const inS = new Uint8Array(K), own = order[j];
+      let x0 = W, y0 = H, x1 = -1, y1 = -1;
+      for (let q = j; q < order.length; q++) {
+        const l = order[q]; inS[l] = 1; const b = bb[l];
+        x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
+      }
+      if (x1 < 0) continue;
+      const fw = x1 - x0 + 3, fh = y1 - y0 + 3;
+      const field = new Float32Array(fw * fh);
+      const k2 = 1 / (2 * cut);
+      for (let v = 1; v < fh - 1; v++) {
+        const y = y0 + v - 1, row = y * W;
+        for (let u = 1; u < fw - 1; u++) {
+          const i = row + x0 + u - 1, l = labels[i];
+          // the layer's own colour counts fully; colours drawn above it a bit less,
+          // so where they meet the outside this layer stays just under them
+          if (l >= 0 && inS[l]) field[v * fw + u] = Math.min(1, A[i] * k2) * (l === own ? 1 : 0.62);
+        }
+      }
+      blur121(field, fw, fh);
+      let loops = contours(field, fw, fh, x0, y0);
+      loops = loops.filter(L => Math.abs(area(L)) >= Math.max(speck, 0.5));
+      if (!loops.length) continue;
+      let d = '';
+      for (const L of loops) {
+        const S = simplify(relax(L, 2), tol);
+        nodes += S.length;
+        d += toPath(S, smooth, corner, p.sx, p.sy);
+      }
+      nPaths += loops.length;
+      const col = hex(fill[order[j]]);
+      paths.push(`<path fill="${col}" fill-rule="evenodd" d="${d}"/>`);
+      outlines.push({ d, col });
+    }
+    if (id !== runId) return null;
+    const VW = src.w, VH = src.h;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${VW} ${VH}" width="${VW}" height="${VH}">\n` +
+                paths.join('\n') + `\n</svg>\n`;
+    return {
+      svg, outlines, palette: order.map(l => hex(fill[l])),
+      stats: { layers: paths.length, paths: nPaths, nodes, kb: new Blob([svg]).size / 1024, ms: performance.now() - t0, W, H }
+    };
+  }
+
+  function hexToRgb(h) { const v = parseInt(h.slice(1), 16); return [v >> 16, (v >> 8) & 255, v & 255]; }
+
+  // ---------- render ----------
+  function render() {
+    if (!result) return;
+    const vec = $('vec');
+    if (view === 'outline') {
+      const dots = result.stats.nodes <= 6000;
+      const parts = result.outlines.map(o =>
+        `<path d="${o.d}" fill="none" stroke="var(--accent)" stroke-width="1.2" vector-effect="non-scaling-stroke"/>`);
+      let nodesSvg = '';
+      if (dots) {
+        const r = Math.max(src.w, src.h) / 260;
+        const pts = [];
+        for (const o of result.outlines) {
+          const re = /[MLC]([^MLCZ]+)/g; let m;
+          while ((m = re.exec(o.d))) {
+            const v = m[1].trim().split(/[\s,]+/).map(Number);
+            pts.push(v[v.length - 2], v[v.length - 1]);
+          }
+        }
+        let dd = '';
+        for (let i = 0; i < pts.length; i += 2) dd += `M${fmt(pts[i] - r)} ${fmt(pts[i + 1])}a${fmt(r)} ${fmt(r)} 0 1 0 ${fmt(2 * r)} 0a${fmt(r)} ${fmt(r)} 0 1 0 ${fmt(-2 * r)} 0`;
+        nodesSvg = `<path d="${dd}" fill="var(--node)"/>`;
+      }
+      vec.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${src.w} ${src.h}" preserveAspectRatio="none" style="width:100%;height:100%">${parts.join('')}${nodesSvg}</svg>`;
+    } else {
+      vec.innerHTML = result.svg.replace('<svg ', '<svg preserveAspectRatio="none" style="width:100%;height:100%" ');
+    }
+    const split = view === 'split';
+    $('orig').style.opacity = split ? 1 : (view === 'outline' ? 0.35 : 0);
+    $('divider').hidden = !split;
+    $('splitCtl').hidden = !split;
+    applySplit();
+    const s = result.stats;
+    $('stats').innerHTML =
+      `<span>Слоёв <b>${s.layers}</b></span><span>Контуров <b>${s.paths}</b></span><span>Узлов <b>${s.nodes.toLocaleString('ru')}</b></span>` +
+      `<span>SVG <b>${s.kb < 1024 ? s.kb.toFixed(1) + ' КБ' : (s.kb / 1024).toFixed(2) + ' МБ'}</b></span>` +
+      `<span>Обработано <b>${s.W}×${s.H}</b></span><span>Время <b>${Math.round(s.ms)} мс</b></span>`;
+    $('palette').innerHTML = result.palette.map(c => `<i title="${c}" style="background:${c}"></i>`).join('');
+    $('code').value = result.svg;
+  }
+  function applySplit() {
+    const v = +$('split').value;
+    const vec = $('vec');
+    vec.style.clipPath = view === 'split' ? `inset(0 0 0 ${v}%)` : 'none';
+    $('divider').style.left = `calc(${v}% - 1px)`;
+  }
+
+  function layoutStage() {
+    if (!src) return;
+    const st = $('stage'), wrap = $('stageWrap');
+    const z = $('zoom').value;
+    let w, h;
+    if (z === 'fit') {
+      const maxW = wrap.clientWidth - 24, maxH = Math.max(300, Math.min(window.innerHeight * 0.72, 900)) - 24;
+      const s = Math.min(maxW / src.w, maxH / src.h);
+      w = src.w * s; h = src.h * s;
+      st.style.margin = '12px auto';
+    } else {
+      w = src.w * +z; h = src.h * +z; st.style.margin = '12px';
+    }
+    st.style.width = Math.max(1, Math.round(w)) + 'px';
+    st.style.height = Math.max(1, Math.round(h)) + 'px';
+    st.classList.toggle('px', z !== 'fit' && +z > 1);
+  }
+
+  let timer = null;
+  function schedule(delay = 250) {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (!src) return;
+      const id = ++runId;
+      setStatus('Обработка…', 'busy');
+      try {
+        const r = await trace(id);
+        if (r && id === runId) { result = r; render(); setStatus('Готово'); }
+      } catch (e) {
+        setStatus('Ошибка обработки: ' + e.message, 'warn');
+      }
+    }, delay);
+  }
+
+  // ---------- events ----------
+  for (const el of [ui.colors, ui.alpha, ui.tol, ui.smooth, ui.corner, ui.speck, ui.bgTol, ui.monoColor])
+    el.addEventListener('input', () => { syncLabels(); schedule(); });
+  for (const el of [ui.bgRemove, ui.maxSide, ui.monoOwn, ...document.querySelectorAll('input[name=mode]')])
+    el.addEventListener('change', () => { syncLabels(); schedule(50); });
+  $('split').addEventListener('input', applySplit);
+  $('zoom').addEventListener('change', layoutStage);
+  window.addEventListener('resize', () => { if ($('zoom').value === 'fit') layoutStage(); });
+
+  const tabs = { tabSplit: 'split', tabVector: 'vector', tabOutline: 'outline' };
+  for (const [tid, v] of Object.entries(tabs)) {
+    $(tid).addEventListener('click', () => {
+      view = v;
+      for (const t of Object.keys(tabs)) $(t).setAttribute('aria-selected', String(t === tid));
+      render();
+    });
+  }
+
+  function openFile(f) {
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => loadFrom(r.result, f.name);
+    r.readAsDataURL(f);
+  }
+  $('file').addEventListener('change', e => openFile(e.target.files[0]));
+  const drop = $('drop');
+  drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click(); } });
+  for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); });
+  for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); });
+  drop.addEventListener('drop', e => openFile(e.dataTransfer.files[0]));
+  document.addEventListener('dragover', e => e.preventDefault());
+  document.addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files[0]) openFile(e.dataTransfer.files[0]); });
+  document.addEventListener('paste', e => {
+    const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+    if (item) openFile(new File([item.getAsFile()], 'вставка.png'));
+  });
+
+  const svgName = () => (src ? src.name.replace(/\.[^.]+$/, '') : 'vector') + '.svg';
+  $('copyBtn').addEventListener('click', async () => {
+    if (!result) return;
+    try { await navigator.clipboard.writeText(result.svg); setStatus('SVG скопирован в буфер обмена'); }
+    catch { const d = document.querySelector('details.code'); d.open = true; $('code').select(); setStatus('Скопируйте выделенный код вручную (Ctrl+C)', 'warn'); }
+  });
+  // a page saved to disk (outside claude.ai): the browser downloads the file itself
+  const plainSave = () => {
+    const url = URL.createObjectURL(new Blob([result.svg], { type: 'image/svg+xml' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = svgName();
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setStatus('Файл сохранён');
+  };
+  $('saveBtn').addEventListener('click', async () => {
+    if (!result) return;
+    if (!downloads) { plainSave(); return; }
+    try { await downloads.save({ filename: svgName(), data: result.svg }); setStatus('Файл сохранён'); }
+    catch (e) {
+      if (e && e.code === 'declined') setStatus('Сохранение отменено');
+      else if (e && e.code === 'rate_limited') setStatus('Окно сохранения уже открыто', 'warn');
+      else { setStatus('Сохранение недоступно здесь. Скопируйте SVG-код.', 'warn'); $('saveBtn').hidden = true; }
+    }
+  });
+
+  // download only where the viewer offers it
+  if (window.claude && typeof window.claude.use === 'function') {
+    window.claude.use('downloads').then(d => { downloads = d; $('saveBtn').hidden = !d; }).catch(() => {});
+  } else {
+    $('saveBtn').hidden = false;      // opened as a file on your computer
+  }
+
+  syncLabels();
+  document.fonts?.ready.then(() => loadFrom(sampleImage(), 'пример.png')) ?? loadFrom(sampleImage(), 'пример.png');
+})();
+</script>
