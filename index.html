@@ -19,7 +19,7 @@
   --handle: #8a5cf6;
   --check-a: #ffffff;
   --check-b: #e3e7ed;
-  --warn: #a76200;
+  --warn: #a76200; --ok: #1f9d55;
   --font-display: "Unbounded", "Onest", system-ui, sans-serif;
   --font-body: "Onest", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -29,13 +29,13 @@
   :root:not([data-theme="light"]) {
     --bg: #0e1116; --panel: #161a21; --panel-2: #1c212a; --line: #2a313c; --fg: #e6e9ef;
     --muted: #97a0b0; --accent: #7d95ff; --accent-ink: #0e1116; --node: #ff8a4c; --handle: #b79bff;
-    --check-a: #222730; --check-b: #1a1e25; --warn: #f0b04a; color-scheme: dark;
+    --check-a: #222730; --check-b: #1a1e25; --warn: #f0b04a; --ok: #2fbf71; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0e1116; --panel: #161a21; --panel-2: #1c212a; --line: #2a313c; --fg: #e6e9ef;
   --muted: #97a0b0; --accent: #7d95ff; --accent-ink: #0e1116; --node: #ff8a4c; --handle: #b79bff;
-  --check-a: #222730; --check-b: #1a1e25; --warn: #f0b04a; color-scheme: dark;
+  --check-a: #222730; --check-b: #1a1e25; --warn: #f0b04a; --ok: #2fbf71; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -89,7 +89,24 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 input[type=color] { width: 40px; height: 28px; border: 1px solid var(--line); border-radius: 6px; padding: 0; background: var(--panel); }
 select { font: 14px var(--font-body); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
 .palette { display: flex; flex-wrap: wrap; gap: 4px; }
-.palette i { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--line); display: block; }
+.palette { gap: 6px; margin-top: 4px; }
+.palette .sw { position: relative; width: 24px; height: 24px; border-radius: 5px; border: 1px solid var(--line); background: var(--c); padding: 0; cursor: pointer; }
+.palette .sw:hover { transform: translateY(-1px); box-shadow: 0 1px 4px rgb(0 0 0 / .18); }
+.palette .sw.locked { outline: 2px solid var(--ok); outline-offset: 1px; }
+.palette .sw.locked::after {
+  content: ''; position: absolute; right: -6px; top: -6px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--ok) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.5 7.2l2.3 2.3 4.7-4.9' fill='none' stroke='white' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px no-repeat;
+  box-shadow: 0 0 0 1.5px var(--panel);
+}
+.link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+details.adjust { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+details.adjust summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; font-weight: 500; font-size: 13px; }
+details.adjust summary::-webkit-details-marker { display: none; }
+details.adjust .tri { color: var(--muted); transition: transform .15s; flex: none; }
+details.adjust[open] .tri { transform: rotate(90deg); }
+details.adjust summary .dot { margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; }
+.adjust-body { display: grid; gap: 10px; padding: 2px 10px 10px; }
+.sub-legend { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 600; margin-top: 2px; }
 
 .bench { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); display: grid; min-width: 0; }
 .bench-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--line); }
@@ -182,6 +199,38 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         </div>
       </div>
 
+      <details class="adjust" id="adjust">
+        <summary>
+          <svg class="tri" viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><path d="M3 1.5 L7.5 5 L3 8.5 Z" fill="currentColor"/></svg>
+          <span>Коррекция изображения</span>
+          <span class="dot" id="adjBadge" title="Коррекция включена" hidden></span>
+        </summary>
+        <div class="adjust-body">
+          <div class="ctl">
+            <div class="top"><span>Яркость</span><span class="val" id="brightVal"></span></div>
+            <input type="range" id="bright" min="-100" max="100" step="1" value="0">
+          </div>
+          <div class="ctl">
+            <div class="top"><span>Контрастность</span><span class="val" id="contrastVal"></span></div>
+            <input type="range" id="contrast" min="-100" max="100" step="1" value="0">
+          </div>
+          <div class="sub-legend">Уровни</div>
+          <div class="ctl">
+            <div class="top"><span>Чёрный</span><span class="val" id="lvLoVal"></span></div>
+            <input type="range" id="lvLo" min="0" max="253" step="1" value="0">
+          </div>
+          <div class="ctl">
+            <div class="top"><span>Белый</span><span class="val" id="lvHiVal"></span></div>
+            <input type="range" id="lvHi" min="2" max="255" step="1" value="255">
+          </div>
+          <div class="ctl">
+            <div class="top"><span>Средние тона (гамма)</span><span class="val" id="gammaVal"></span></div>
+            <input type="range" id="gamma" min="-100" max="100" step="1" value="0">
+          </div>
+          <div class="row" style="justify-content: flex-end;"><button class="btn small" id="adjReset" type="button">Сбросить</button></div>
+        </div>
+      </details>
+
       <fieldset>
         <legend>Режим</legend>
         <div class="seg" role="radiogroup" aria-label="Режим">
@@ -191,7 +240,13 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         <div class="ctl" id="colorsCtl">
           <div class="top"><span>Количество цветов</span><span class="val" id="colorsVal"></span></div>
           <input type="range" id="colors" min="2" max="32" step="1" value="8">
+        </div>
+        <div class="ctl" id="varietyCtl">
+          <div class="top"><span>Вариативность цветов</span><span class="val" id="varietyVal"></span></div>
+          <input type="range" id="variety" min="0" max="100" step="1" value="0">
+          <span class="hint">больше разных оттенков вместо похожих (всего не больше 32); закреплённые цвета остаются</span>
           <div class="palette" id="palette"></div>
+          <span class="hint" id="lockInfo"></span>
         </div>
         <div class="ctl" id="monoCtl" hidden>
           <label class="check"><input type="checkbox" id="monoOwn"> <span>Свой цвет заливки</span></label>
@@ -263,6 +318,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
           </select>
         </div>
       </fieldset>
+      <button class="btn" id="resetAll" type="button">Сброс настроек</button>
     </aside>
 
     <section class="bench" aria-label="Предпросмотр">
@@ -314,17 +370,20 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   // anti-aliased edges between two colours form small "blend" colours (a
   // thin ring around every shape); drop them so edge pixels go to the nearer
   // of the two real colours and the border falls in the middle
-  function dropBlends(C, share, solid) {
-    let alive = C.map((c, i) => i).filter(i => share[i] > 0);
+  function dropBlends(C, share, solid, keep) {
+    // keep[i]: a colour the user fixed - never dropped, never moved
+    let alive = C.map((c, i) => i).filter(i => share[i] > 0 || (keep && keep[i]));
+    const kept = i => !!(keep && keep[i]);
     // near-identical colours (compression noise splits one colour into two)
     // are one colour: the smaller one joins the bigger
     for (let merged = true; merged;) {
       merged = false;
       for (const a of alive) for (const b of alive) {
-        if (a === b || share[a] < share[b]) continue;
+        if (a === b || kept(b)) continue;
+        if (!kept(a) && share[a] < share[b]) continue;
         if (hyp(C[a][0] - C[b][0], C[a][1] - C[b][1], C[a][2] - C[b][2]) < 34) {
           const w = share[a] + share[b];
-          C[a] = C[a].map((v, q) => (v * share[a] + C[b][q] * share[b]) / w);
+          if (!kept(a)) C[a] = C[a].map((v, q) => (v * share[a] + C[b][q] * share[b]) / w);
           share[a] = w;
           alive = alive.filter(i => i !== b);
           merged = true;
@@ -335,7 +394,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     let changed = true;
     while (changed) {
       changed = false;
-      const small = alive.filter(i => share[i] < 0.15 && !(solid && solid[i])).sort((a, b) => share[a] - share[b]);
+      const small = alive.filter(i => share[i] < 0.15 && !(solid && solid[i]) && !kept(i)).sort((a, b) => share[a] - share[b]);
       for (const c of small) {
         const big = alive.filter(i => i !== c && share[i] > share[c]);
         let blend = false;
@@ -352,11 +411,72 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         if (blend) { alive = alive.filter(i => i !== c); changed = true; break; }
       }
     }
-    return alive.map(i => C[i].map(Math.round));
+    const out = alive.map(i => C[i].map(Math.round));
+    out.share = alive.map(i => share[i]);
+    out.kept = alive.map(i => kept(i));
+    return out;
   }
 
-  function palette(p, A, k) {
+  // final palette: the fixed colours first, then the free ones. With
+  // variety > 0 there are more candidates than places, and the free places
+  // go to colours that differ most from the ones already chosen (instead of
+  // only the most common ones).
+  function pickPalette(R, kFree, variety, pool) {
+    const v = Math.max(0, Math.min(1, variety));
+    // with variety on, candidates that the blend filter dropped may fill
+    // the free places that are left (if they are not look-alikes)
+    if (v > 0 && pool) {
+      const nFree = R.kept.filter(k => !k).length;
+      const add = [];
+      const far = c => [...R, ...add].every(q => hyp(q[0] - c[0], q[1] - c[1], q[2] - c[2]) >= 34);
+      const rest = pool.filter(e => e.share > 0).sort((a, b) => b.share - a.share);
+      for (const e of rest) {
+        if (nFree + add.length >= kFree) break;
+        const c = e.c.map(Math.round);
+        if (far(c)) { add.push(c); add.share = add.share || []; add.share.push(e.share); }
+      }
+      if (add.length) {
+        const R2 = [...R, ...add];
+        R2.share = [...R.share, ...add.share]; R2.kept = [...R.kept, ...add.map(() => false)];
+        R = R2;
+      }
+    }
+    const fixed = [], free = [];
+    R.forEach((c, i) => (R.kept[i] ? fixed : free).push(i));
+    let chosen = free;
+    if (free.length > kFree) {
+      const sel = fixed.slice(), left = free.slice();
+      chosen = [];
+      while (chosen.length < kFree && left.length) {
+        let best = -1, bs = -Infinity;
+        for (let q = 0; q < left.length; q++) {
+          const i = left[q];
+          let dmin = 1;
+          for (const j of sel) dmin = Math.min(dmin, Math.sqrt(colourDist(R[i][0], R[i][1], R[i][2], R[j][0], R[j][1], R[j][2])) / 765);
+          const sc = (1 - 0.7 * v) * Math.log(Math.max(1e-9, R.share[i])) + v * 3 * Math.log(Math.max(1e-6, dmin));
+          if (sc > bs) { bs = sc; best = q; }
+        }
+        const i = left.splice(best, 1)[0];
+        chosen.push(i); sel.push(i);
+      }
+      chosen.sort((a, b) => a - b);
+    }
+    const out = [...fixed, ...chosen].map(i => R[i]);
+    out.locked = fixed.length;
+    return out;
+  }
+
+  function palette(p, A, kAsked, locked = [], variety = 0) {
     const { W, H, data } = p, N = W * H;
+    // locked: colours the user fixed. They always stay, the rest of the
+    // places (up to 32 in all) are found in the picture
+    const nL = locked.length;
+    const kAll = Math.min(32, Math.max(kAsked, nL)), kFree = kAll - nL;
+    const v = Math.max(0, Math.min(1, variety));
+    // free candidates: more than places when variety is on; with fixed
+    // colours a few extra too, since look-alikes of a fixed colour merge into it
+    const kCand = Math.min(48, Math.round(kFree * (1 + 3 * v)) + (nL ? nL + 2 : 0));
+    const k = kAll;
     // exact palette when the picture has few flat colours
     const exact = new Map();
     let opaque = 0;
@@ -371,7 +491,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       const top = [...exact.entries()].sort((a, b) => b[1] - a[1]);
       const covered = top.slice(0, k).reduce((s, e) => s + e[1], 0);
       if (top.length <= k || covered > 0.985 * opaque) {
-        const sel = top.slice(0, k);
+        const sel = top.slice(0, kCand);
         const cs = sel.map(([c]) => [c >> 16, (c >> 8) & 255, c & 255]);
         // a real flat colour has solid areas; an edge blend is only a thin rim
         const idx = new Map(sel.map(([c], i) => [c, i]));
@@ -385,30 +505,46 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
           if (key(i - 1) === c && key(i + 1) === c && key(i - W) === c && key(i + W) === c) inner[q]++;
         }
         const solid = sel.map((e, i) => inner[i] >= Math.max(4, 0.05 * e[1]));
-        if (cs.length) return dropBlends(cs, sel.map(e => e[1] / Math.max(1, opaque)), solid);
+        if (cs.length || nL) {
+          const pool = cs.map((c, i) => ({ c: c.slice(), share: sel[i][1] / Math.max(1, opaque) }));
+          const R = dropBlends([...locked.map(c => c.slice()), ...cs], [...locked.map(() => 0), ...sel.map(e => e[1] / Math.max(1, opaque))],
+                               [...locked.map(() => true), ...solid], [...locked.map(() => true), ...cs.map(() => false)]);
+          return pickPalette(R, kFree, v, pool);
+        }
       }
     }
     // k-means++ on a sample of opaque pixels
     const idx = [];
     const step = Math.max(1, Math.floor(N / 40000));
     for (let i = (step >> 1); i < N; i += step) if (A[i] >= 0.5) idx.push(i);
-    if (!idx.length) return [[0, 0, 0]];
+    if (!idx.length) { const o = nL ? locked.map(c => c.slice()) : [[0, 0, 0]]; o.locked = nL; return o; }
     const S = idx.length, px = new Float32Array(S * 3);
     idx.forEach((i, j) => { px[j * 3] = data[i * 4]; px[j * 3 + 1] = data[i * 4 + 1]; px[j * 3 + 2] = data[i * 4 + 2]; });
     let rnd = 12345; const rand = () => (rnd = (rnd * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-    const C = [];
+    // fixed colours are centres that never move; the free ones are seeded
+    // k-means++ style away from them
+    const C = locked.map(c => c.slice());
+    const nC = nL + kCand;
     const dmin = new Float64Array(S).fill(Infinity);
     let pick = Math.floor(rand() * S);
-    while (C.length < k) {
-      C.push([px[pick * 3], px[pick * 3 + 1], px[pick * 3 + 2]]);
-      const c = C[C.length - 1]; let sum = 0;
+    const addDist = c => {
+      let sum = 0;
       for (let j = 0; j < S; j++) {
         const d = colourDist(px[j * 3], px[j * 3 + 1], px[j * 3 + 2], c[0], c[1], c[2]);
         if (d < dmin[j]) dmin[j] = d; sum += dmin[j];
       }
-      if (sum <= 0) break;
+      return sum;
+    };
+    const nextPick = sum => {
       let r = rand() * sum; pick = 0;
       for (let j = 0; j < S; j++) { r -= dmin[j]; if (r <= 0) { pick = j; break; } }
+    };
+    if (nL) { let sum = 0; for (const c of C) sum = addDist(c); if (sum > 0) nextPick(sum); }
+    while (C.length < nC) {
+      C.push([px[pick * 3], px[pick * 3 + 1], px[pick * 3 + 2]]);
+      const sum = addDist(C[C.length - 1]);
+      if (sum <= 0) break;
+      nextPick(sum);
     }
     const lab = new Int32Array(S);
     for (let it = 0; it < 14; it++) {
@@ -422,7 +558,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         lab[j] = best; const a = acc[best]; a[0] += px[j * 3]; a[1] += px[j * 3 + 1]; a[2] += px[j * 3 + 2]; a[3]++;
       }
       let moved = 0;
-      for (let c = 0; c < C.length; c++) if (acc[c][3]) {
+      for (let c = nL; c < C.length; c++) if (acc[c][3]) {
         const n = [acc[c][0] / acc[c][3], acc[c][1] / acc[c][3], acc[c][2] / acc[c][3]];
         moved += Math.abs(n[0] - C[c][0]) + Math.abs(n[1] - C[c][1]) + Math.abs(n[2] - C[c][2]);
         C[c] = n;
@@ -434,7 +570,9 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     // nearer of the two real colours and the border falls in the middle
     const share = new Float64Array(C.length);
     for (let j = 0; j < S; j++) share[lab[j]] += 1 / S;
-    return dropBlends(C, share);
+    const pool = C.slice(nL).map((c, i) => ({ c: c.slice(), share: share[nL + i] }));
+    const R = dropBlends(C, share, null, C.map((c, i) => i < nL));
+    return pickPalette(R, kFree, v, pool);
 
   }
 
@@ -1925,14 +2063,16 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
 (() => {
   const $ = id => document.getElementById(id);
   const radio = name => document.querySelector(`input[name=${name}]:checked`).value;
+  const lockedCols = [];     // fixed palette colours, '#rrggbb'
   const ui = {
+    variety: $('variety'), bright: $('bright'), contrast: $('contrast'), lvLo: $('lvLo'), lvHi: $('lvHi'), gamma: $('gamma'),
     colors: $('colors'), alpha: $('alpha'), tol: $('tol'), relax: $('relax'), corner: $('corner'),
     speck: $('speck'), thin: $('thin'), bgTol: $('bgTol'), maxSide: $('maxSide'), monoOwn: $('monoOwn'), monoColor: $('monoColor'),
   };
   // the tracing code lives in one text block: the page runs it, and the same
   // text starts background workers that trace the colour layers in parallel
   const CORE_SRC = document.getElementById('vz-core').textContent;
-  const core = new Function(CORE_SRC + '\nreturn { colourDist, dropBlends, palette, contours, blur121, relax, area, simplify, arcIndex, findCorners, fitEllipse, hull2d, splitUTurns, relaxPinned, refineCorners, loopToPath, fmt, hex, hexToRgb, fixBlendPixels, boxBlur, traceLayer, layerLoops, fitLoops, packLoops, unpackLoops, sub, len };')();
+  const core = new Function(CORE_SRC + '\nreturn { colourDist, dropBlends, pickPalette, palette, contours, blur121, relax, area, simplify, arcIndex, findCorners, fitEllipse, hull2d, splitUTurns, relaxPinned, refineCorners, loopToPath, fmt, hex, hexToRgb, fixBlendPixels, boxBlur, traceLayer, layerLoops, fitLoops, packLoops, unpackLoops, sub, len };')();
   const { colourDist, dropBlends, palette, contours, blur121, relax, area, simplify, arcIndex, findCorners, fitEllipse, hull2d, splitUTurns, relaxPinned, refineCorners, loopToPath, fmt, hex, hexToRgb, fixBlendPixels, boxBlur, traceLayer, layerLoops, fitLoops, packLoops, unpackLoops, sub, len } = core;
   const sleep = () => new Promise(r => setTimeout(r, 0));
   let src = null;          // {img, name, w, h}
@@ -1950,6 +2090,14 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
 
   function syncLabels() {
     $('colorsVal').textContent = ui.colors.value;
+    $('varietyVal').textContent = ui.variety.value === '0' ? 'выкл' : ui.variety.value + '%';
+    const sg = v => (v > 0 ? '+' : '') + v;
+    $('brightVal').textContent = sg(+ui.bright.value);
+    $('contrastVal').textContent = sg(+ui.contrast.value);
+    $('lvLoVal').textContent = ui.lvLo.value;
+    $('lvHiVal').textContent = ui.lvHi.value;
+    $('gammaVal').textContent = gammaOf().toFixed(2);
+    $('adjBadge').hidden = !adjActive();
     $('alphaVal').textContent = ui.alpha.value + '%';
     $('tolVal').textContent = tolPx().toFixed(1) + ' px';
     $('relaxVal').textContent = ui.relax.value === '0' ? 'выкл' : ui.relax.value;
@@ -1958,7 +2106,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     $('thinVal').textContent = ui.thin.value === '0' ? 'выкл' : ui.thin.value + '%';
     $('bgTolVal').textContent = ui.bgTol.value + '%';
     const mono = radio('mode') === 'mono';
-    $('colorsCtl').hidden = mono;
+    $('colorsCtl').hidden = mono; $('varietyCtl').hidden = mono;
     $('monoCtl').hidden = !mono;
     $('bgTolCtl').hidden = radio('bg') === 'keep';
     $('curveHint').textContent = CURVE_HINTS[radio('curve')];
@@ -1998,11 +2146,15 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   function loadFrom(url, name) {
     const img = new Image();
     img.onload = () => {
-      src = { img, name, w: img.naturalWidth, h: img.naturalHeight };
+      const same = src && src.name === name && src.url === url;
+      src = { img, name, url, w: img.naturalWidth, h: img.naturalHeight };
+      if (!same) lockedCols.length = 0;       // fixed colours belong to one picture
       $('fileName').textContent = name;
       $('sizeBadge').textContent = img.naturalWidth + '×' + img.naturalHeight;
       $('orig').src = url;
       prep = null;
+      if (adjActive()) updateOrig();
+      renderPalette();
       const transparent = hasTransparency();
       const auto = !transparent && cornersUniform();
       $(auto ? 'bgAll' : 'bgKeep').checked = true;
@@ -2010,17 +2162,63 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       if (!transparent) {
         setStatus(auto ? 'Прозрачности нет: однотонный фон убран.' : 'Прозрачности нет: фон станет частью рисунка.', 'warn');
       }
+      splitX = 0.5;                       // a new picture: comparison line in the middle
       fitView(false);
+      applySplit();
       schedule(0);
     };
     img.onerror = () => setStatus('Не удалось открыть файл как изображение.', 'warn');
     img.src = url;
   }
 
+  // ---------- image correction: levels, brightness, contrast ----------
+  const adjKey = () => [ui.lvLo.value, ui.lvHi.value, ui.gamma.value, ui.bright.value, ui.contrast.value].join(',');
+  const adjActive = () => adjKey() !== '0,255,0,0,0';
+  const gammaOf = () => Math.pow(3, +ui.gamma.value / 100);     // 0.33 … 1 … 3, middle = 1
+  function adjLUT() {
+    const lo = +ui.lvLo.value, hi = Math.max(lo + 1, +ui.lvHi.value), gm = gammaOf();
+    const b = +ui.bright.value * 2.55, c = +ui.contrast.value * 2.55;
+    const f = (259 * (c + 255)) / (255 * (259 - c));
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) {
+      let x = Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
+      x = Math.pow(x, 1 / gm) * 255;           // levels: black, white, midtones
+      x += b;                                  // brightness
+      x = f * (x - 128) + 128;                 // contrast around mid grey
+      lut[v] = Math.round(x);
+    }
+    return lut;
+  }
+  function applyAdjust(d) {
+    if (!adjActive()) return;
+    const lut = adjLUT();
+    for (let i = 0; i < d.length; i += 4) { d[i] = lut[d[i]]; d[i + 1] = lut[d[i + 1]]; d[i + 2] = lut[d[i + 2]]; }
+  }
+  // the original shown under / beside the vector follows the correction
+  let origTimer = null, origUrl = null;
+  function updateOrig() {
+    clearTimeout(origTimer);
+    origTimer = setTimeout(() => {
+      if (!src) return;
+      if (origUrl) { URL.revokeObjectURL(origUrl); origUrl = null; }
+      if (!adjActive()) { $('orig').src = src.url; return; }
+      const sc = Math.min(1, 4096 / Math.max(src.w, src.h));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(src.w * sc)); c.height = Math.max(1, Math.round(src.h * sc));
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(src.img, 0, 0, c.width, c.height);
+      const im = g.getImageData(0, 0, c.width, c.height);
+      applyAdjust(im.data);
+      g.putImageData(im, 0, 0);
+      const name = src.name;
+      c.toBlob(b => { if (!b || !src || src.name !== name) return; origUrl = URL.createObjectURL(b); $('orig').src = origUrl; });
+    }, 120);
+  }
+
   // ---------- prepare pixels ----------
   function getPrep() {
     const maxSide = +ui.maxSide.value;
-    const key = src.name + '|' + maxSide + '|' + src.img.src.length;
+    const key = src.name + '|' + maxSide + '|' + src.img.src.length + '|' + adjKey();
     if (prep && prep.key === key) return prep;
     const scale = Math.min(1, maxSide / Math.max(src.w, src.h));
     const W = Math.max(1, Math.round(src.w * scale)), H = Math.max(1, Math.round(src.h * scale));
@@ -2029,6 +2227,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     g.imageSmoothingQuality = 'high';
     g.drawImage(src.img, 0, 0, W, H);
     const data = g.getImageData(0, 0, W, H).data;
+    applyAdjust(data);
     prep = { W, H, data, sx: src.w / W, sy: src.h / H, key };
     return prep;
   }
@@ -2247,7 +2446,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       C = [ui.monoOwn.checked ? hexToRgb(ui.monoColor.value) : (n ? [r / n, g / n, b / n].map(Math.round) : [0, 0, 0])];
       for (let i = 0; i < N; i++) if (A[i] > 0.02) labels[i] = 0;
     } else {
-      C = palette(pd, A, +ui.colors.value);
+      C = palette(pd, A, +ui.colors.value, lockedCols.map(hexToRgb), +ui.variety.value / 100);
       // nearest palette colour, remembered per exact colour (photos repeat colours a lot)
       const memo = new Uint8Array(1 << 24);
       for (let i = 0; i < N; i++) {
@@ -2272,7 +2471,9 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       if (x < q[0]) q[0] = x; if (y < q[1]) q[1] = y; if (x > q[2]) q[2] = x; if (y > q[3]) q[3] = y;
       sum[l][0] += D[i * 4]; sum[l][1] += D[i * 4 + 1]; sum[l][2] += D[i * 4 + 2];
     }
-    const fill = C.map((c, l) => mono || !cnt[l] ? c : sum[l].map(v => Math.round(v / cnt[l])));
+    // a fixed colour is used exactly as chosen
+    const nLocked = mono ? 0 : (C.locked || 0);
+    const fill = C.map((c, l) => mono || !cnt[l] || l < nLocked ? c : sum[l].map(v => Math.round(v / cnt[l])));
     // stacked layers: biggest colour first; each layer also covers the colours drawn above it
     const order = [...Array(K).keys()].filter(l => cnt[l] > 0).sort((a, b) => cnt[b] - cnt[a]);
     const opts = {
@@ -2297,7 +2498,9 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${src.w} ${src.h}" width="${src.w}" height="${src.h}">\n` +
                 paths.join('\n') + `\n</svg>\n`;
     return {
-      svg, outlines, palette: order.map(l => hex(fill[l])),
+      svg, outlines,
+      // colours that ended up in the drawing (fixed ones are always listed)
+      palette: mono ? [] : [...lockedCols, ...order.filter((l, k) => l >= nLocked && res[k] && res[k].d).map(l => hex(fill[l])).filter(c => !lockedCols.includes(c))],
       stats: { layers: paths.length, paths: nPaths, nodes, kb: new Blob([svg]).size / 1024, ms: performance.now() - t0, W, H }
     };
   }
@@ -2466,9 +2669,35 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       `<span>Слоёв <b>${s.layers}</b></span><span>Контуров <b>${s.paths}</b></span><span>Узлов <b>${s.nodes.toLocaleString('ru')}</b></span>` +
       `<span>SVG <b>${s.kb < 1024 ? s.kb.toFixed(1) + ' КБ' : (s.kb / 1024).toFixed(2) + ' МБ'}</b></span>` +
       `<span>Обработано <b>${s.W}×${s.H}</b></span><span>Время <b>${Math.round(s.ms)} мс</b></span>`;
-    $('palette').innerHTML = result.palette.map(c => `<i title="${c}" style="background:${c}"></i>`).join('');
+    renderPalette();
     $('code').value = result.svg;
   }
+
+  // ---------- palette: click a colour to fix it ----------
+  function renderPalette() {
+    const cols = result ? result.palette : lockedCols;
+    $('palette').innerHTML = cols.map(c => {
+      const on = lockedCols.includes(c);
+      return `<button type="button" class="sw${on ? ' locked' : ''}" data-c="${c}" style="--c:${c}" aria-pressed="${on}" ` +
+             `title="${c}${on ? ' — закреплён, нажмите чтобы снять' : ' — нажмите, чтобы закрепить'}"></button>`;
+    }).join('');
+    $('lockInfo').innerHTML = lockedCols.length
+      ? `Закреплено: ${lockedCols.length} · <button type="button" class="link" id="unlockAll">снять все</button>`
+      : 'Нажмите на цвет, чтобы закрепить его.';
+  }
+  $('palette').addEventListener('click', e => {
+    const b = e.target.closest('button.sw');
+    if (!b) return;
+    const c = b.dataset.c, i = lockedCols.indexOf(c);
+    if (i >= 0) lockedCols.splice(i, 1);
+    else if (lockedCols.length < 32) lockedCols.push(c);
+    renderPalette();
+    schedule(80);
+  });
+  $('lockInfo').addEventListener('click', e => {
+    if (e.target.id !== 'unlockAll') return;
+    lockedCols.length = 0; renderPalette(); schedule(50);
+  });
 
   let timer = null;
   function schedule(delay = 250) {
@@ -2487,10 +2716,43 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   }
 
   // ---------- events ----------
-  for (const el of [ui.colors, ui.alpha, ui.tol, ui.relax, ui.corner, ui.speck, ui.thin, ui.bgTol, ui.monoColor])
+  for (const el of [ui.variety, ui.colors, ui.alpha, ui.tol, ui.relax, ui.corner, ui.speck, ui.thin, ui.bgTol, ui.monoColor])
     el.addEventListener('input', () => { syncLabels(); schedule(); });
   for (const el of [ui.maxSide, ui.monoOwn, ...document.querySelectorAll('input[name=mode], input[name=bg], input[name=curve]')])
     el.addEventListener('change', () => { syncLabels(); schedule(50); });
+
+  // image correction: levels first keep the black and white points apart
+  for (const el of [ui.bright, ui.contrast, ui.lvLo, ui.lvHi, ui.gamma]) {
+    el.addEventListener('input', () => {
+      if (+ui.lvHi.value - +ui.lvLo.value < 2) {
+        if (el === ui.lvLo) ui.lvLo.value = +ui.lvHi.value - 2; else ui.lvHi.value = +ui.lvLo.value + 2;
+      }
+      syncLabels(); updateOrig(); schedule();
+    });
+  }
+  $('adjReset').addEventListener('click', () => {
+    ui.bright.value = 0; ui.contrast.value = 0; ui.lvLo.value = 0; ui.lvHi.value = 255; ui.gamma.value = 0;
+    syncLabels(); updateOrig(); schedule(50);
+  });
+
+  // every setting back to how the page starts (fixed colours are released too)
+  $('resetAll').addEventListener('click', () => {
+    for (const el of document.querySelectorAll('.rail input, .rail select')) {
+      if (el.type === 'file') continue;
+      if (el.type === 'radio' || el.type === 'checkbox') el.checked = el.defaultChecked;
+      else if (el.tagName === 'SELECT') { for (const o of el.options) o.selected = o.defaultSelected; }
+      else el.value = el.defaultValue;
+    }
+    lockedCols.length = 0;
+    prep = null;
+    if (src) {                            // background: the same automatic choice as on opening
+      const auto = !hasTransparency() && cornersUniform();
+      $(auto ? 'bgAll' : 'bgKeep').checked = true;
+    }
+    syncLabels(); updateOrig(); renderPalette();
+    setStatus('Настройки сброшены');
+    schedule(0);
+  });
 
   const tabs = { tabSplit: 'split', tabVector: 'vector', tabOutline: 'outline' };
   for (const [tid, v] of Object.entries(tabs)) {
