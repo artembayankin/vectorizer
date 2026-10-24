@@ -305,199 +305,8 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   </div>
 </div>
 
-<script>
-(() => {
-  const $ = id => document.getElementById(id);
-  const radio = name => document.querySelector(`input[name=${name}]:checked`).value;
-  const ui = {
-    colors: $('colors'), alpha: $('alpha'), tol: $('tol'), relax: $('relax'), corner: $('corner'),
-    speck: $('speck'), thin: $('thin'), bgTol: $('bgTol'), maxSide: $('maxSide'), monoOwn: $('monoOwn'), monoColor: $('monoColor'),
-  };
-  let src = null;          // {img, name, w, h}
-  let prep = null;         // {W, H, data, sx, sy, key}
-  let result = null;
-  let view = 'split';
-  let downloads = null;
-  let runId = 0;
-
-  const CURVE_HINTS = {
-    bezier: 'Кубические кривые Безье подгоняются к контуру: меньше всего узлов при круглых формах.',
-    spline: 'Гладкий сплайн (как NURBS) через упрощённые точки: самые мягкие переходы, плавность второго порядка.',
-    poly: 'Только прямые отрезки между узлами.',
-  };
-
-  function syncLabels() {
-    $('colorsVal').textContent = ui.colors.value;
-    $('alphaVal').textContent = ui.alpha.value + '%';
-    $('tolVal').textContent = tolPx().toFixed(1) + ' px';
-    $('relaxVal').textContent = ui.relax.value === '0' ? 'выкл' : ui.relax.value;
-    $('cornerVal').textContent = ui.corner.value + '°';
-    $('speckVal').textContent = ui.speck.value + ' px²';
-    $('thinVal').textContent = ui.thin.value === '0' ? 'выкл' : ui.thin.value + '%';
-    $('bgTolVal').textContent = ui.bgTol.value + '%';
-    const mono = radio('mode') === 'mono';
-    $('colorsCtl').hidden = mono;
-    $('monoCtl').hidden = !mono;
-    $('bgTolCtl').hidden = radio('bg') === 'keep';
-    $('curveHint').textContent = CURVE_HINTS[radio('curve')];
-  }
-
-  // "Точность": the slider moves to the right for more precision, so the
-  // allowed deviation goes down from 8 px to 0.2 px
-  const tolPx = () => Math.round((8.2 - +ui.tol.value) * 10) / 10;
-
-  function setStatus(text, cls) {
-    const s = $('status'); s.textContent = text; s.className = 'status' + (cls ? ' ' + cls : '');
-  }
-
-  // ---------- sample image ----------
-  function sampleImage() {
-    const c = document.createElement('canvas'); c.width = 520; c.height = 520;
-    const g = c.getContext('2d');
-    g.translate(260, 260);
-    g.fillStyle = '#1f3a5f'; g.beginPath(); g.arc(0, 0, 230, 0, Math.PI * 2); g.fill();
-    g.fillStyle = '#f2c14e'; g.beginPath(); g.arc(70, -70, 52, 0, Math.PI * 2); g.fill();
-    g.save(); g.beginPath(); g.arc(0, 0, 230, 0, Math.PI * 2); g.clip();
-    g.fillStyle = '#7fb7be';
-    g.beginPath(); g.moveTo(-260, 120); g.lineTo(-120, -40); g.lineTo(-40, 50); g.lineTo(40, -10); g.lineTo(260, 140); g.lineTo(260, 260); g.lineTo(-260, 260); g.fill();
-    g.fillStyle = '#eef2f3';
-    g.beginPath(); g.moveTo(-120, -40); g.lineTo(-80, 6); g.lineTo(-100, 0); g.lineTo(-120, 18); g.lineTo(-140, -18); g.fill();
-    g.fillStyle = '#2d6a4f';
-    g.beginPath(); g.moveTo(-260, 170);
-    for (let x = -260; x <= 260; x += 20) g.lineTo(x, 150 + 18 * Math.sin(x / 40));
-    g.lineTo(260, 260); g.lineTo(-260, 260); g.fill();
-    g.restore();
-    g.strokeStyle = '#e4572e'; g.lineWidth = 14; g.beginPath(); g.arc(0, 0, 238, 0, Math.PI * 2); g.stroke();
-    g.fillStyle = '#ffffff'; g.font = '600 46px Onest, system-ui, sans-serif'; g.textAlign = 'center';
-    g.fillText('ВЕРШИНА', 0, 195);
-    return c.toDataURL('image/png');
-  }
-
-  function loadFrom(url, name) {
-    const img = new Image();
-    img.onload = () => {
-      src = { img, name, w: img.naturalWidth, h: img.naturalHeight };
-      $('fileName').textContent = name;
-      $('sizeBadge').textContent = img.naturalWidth + '×' + img.naturalHeight;
-      $('orig').src = url;
-      prep = null;
-      const transparent = hasTransparency();
-      const auto = !transparent && cornersUniform();
-      $(auto ? 'bgAll' : 'bgKeep').checked = true;
-      syncLabels();
-      if (!transparent) {
-        setStatus(auto ? 'Прозрачности нет: однотонный фон убран.' : 'Прозрачности нет: фон станет частью рисунка.', 'warn');
-      }
-      fitView(false);
-      schedule(0);
-    };
-    img.onerror = () => setStatus('Не удалось открыть файл как изображение.', 'warn');
-    img.src = url;
-  }
-
-  // ---------- prepare pixels ----------
-  function getPrep() {
-    const maxSide = +ui.maxSide.value;
-    const key = src.name + '|' + maxSide + '|' + src.img.src.length;
-    if (prep && prep.key === key) return prep;
-    const scale = Math.min(1, maxSide / Math.max(src.w, src.h));
-    const W = Math.max(1, Math.round(src.w * scale)), H = Math.max(1, Math.round(src.h * scale));
-    const c = document.createElement('canvas'); c.width = W; c.height = H;
-    const g = c.getContext('2d', { willReadFrequently: true });
-    g.imageSmoothingQuality = 'high';
-    g.drawImage(src.img, 0, 0, W, H);
-    const data = g.getImageData(0, 0, W, H).data;
-    prep = { W, H, data, sx: src.w / W, sy: src.h / H, key };
-    return prep;
-  }
-  // real transparency, not a stray half-transparent edge row some files have
-  function hasTransparency() {
-    const p = getPrep(), d = p.data, W = p.W, H = p.H;
-    let n = 0, t = 0;
-    for (let y = 2; y < H - 2; y += 2) for (let x = 2; x < W - 2; x += 2) {
-      n++;
-      if (d[(y * W + x) * 4 + 3] < 250) t++;
-    }
-    return t > Math.max(3, 0.002 * n);
-  }
-  function cornersUniform() {
-    const p = getPrep(), d = p.data, W = p.W, H = p.H;
-    const idx = [0, W - 1, (H - 1) * W, H * W - 1].map(i => i * 4);
-    const c0 = idx[0];
-    return idx.every(i => Math.abs(d[i] - d[c0]) + Math.abs(d[i + 1] - d[c0 + 1]) + Math.abs(d[i + 2] - d[c0 + 2]) < 40);
-  }
-
-  // Alpha (0..1) and colours to trace. Background removal: a pixel close to
-  // the background colour is background; every other pixel keeps its colour
-  // fully (a light pink stays pink). Only the anti-aliased rim next to the
-  // background becomes partly transparent: it is un-mixed against the solid
-  // colour next to it, so edges keep sub-pixel accuracy.
-  function pixelsToTrace(p) {
-    const { W, H, data } = p, N = W * H;
-    const A = new Float32Array(N);
-    const mode = radio('bg');
-    if (mode === 'keep') {
-      for (let i = 0; i < N; i++) A[i] = data[i * 4 + 3] / 255;
-      return { A, D: data };
-    }
-    const D = new Uint8ClampedArray(data);
-    // background colour: median of the border pixels
-    const rs = [], gs = [], bs = [];
-    const take = (x, y) => { const i = (y * W + x) * 4; if (data[i + 3] > 200) { rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]); } };
-    for (let x = 0; x < W; x += Math.max(1, W >> 7)) { take(x, 0); take(x, H - 1); }
-    for (let y = 0; y < H; y += Math.max(1, H >> 7)) { take(0, y); take(W - 1, y); }
-    if (!rs.length) { for (let i = 0; i < N; i++) A[i] = data[i * 4 + 3] / 255; return { A, D: data }; }
-    const med = a => a.sort((u, v) => u - v)[a.length >> 1];
-    const bg = [med(rs), med(gs), med(bs)];
-    const tolD = 4 + +ui.bgTol.value / 100 * 255;      // colour distance that still counts as background
-    const dist = new Float32Array(N);
-    for (let i = 0; i < N; i++) {
-      const dr = data[i * 4] - bg[0], dg = data[i * 4 + 1] - bg[1], db = data[i * 4 + 2] - bg[2];
-      dist[i] = Math.sqrt(dr * dr + dg * dg + db * db);
-    }
-    const isBg = new Uint8Array(N);
-    if (mode === 'all') {
-      for (let i = 0; i < N; i++) if (dist[i] <= tolD || data[i * 4 + 3] < 8) isBg[i] = 1;
-    } else {
-      // only the background connected to the borders
-      const stack = new Int32Array(N);
-      let sp = 0;
-      const push = i => { if (!isBg[i] && (dist[i] <= tolD || data[i * 4 + 3] < 8)) { isBg[i] = 1; stack[sp++] = i; } };
-      for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
-      for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
-      while (sp) {
-        const i = stack[--sp], x = i % W, y = (i / W) | 0;
-        if (x > 0) push(i - 1); if (x < W - 1) push(i + 1);
-        if (y > 0) push(i - W); if (y < H - 1) push(i + W);
-      }
-    }
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = y * W + x, own = data[i * 4 + 3] / 255;
-      if (isBg[i]) { A[i] = 0; continue; }
-      let edge = false;
-      for (let dy = -1; dy <= 1 && !edge; dy++) for (let dx = -1; dx <= 1; dx++) {
-        const xx = x + dx, yy = y + dy;
-        if (xx >= 0 && yy >= 0 && xx < W && yy < H && isBg[yy * W + xx]) { edge = true; break; }
-      }
-      if (!edge) { A[i] = own; continue; }
-      // the solid colour beside this rim pixel: the one furthest from the background
-      let f = i, fd = dist[i];
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
-        const xx = x + dx, yy = y + dy;
-        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-        const j = yy * W + xx;
-        if (!isBg[j] && dist[j] > fd) { fd = dist[j]; f = j; }
-      }
-      const F = [data[f * 4] - bg[0], data[f * 4 + 1] - bg[1], data[f * 4 + 2] - bg[2]];
-      const Pv = [data[i * 4] - bg[0], data[i * 4 + 1] - bg[1], data[i * 4 + 2] - bg[2]];
-      const FF = F[0] * F[0] + F[1] * F[1] + F[2] * F[2];
-      const a = FF > 1 ? Math.max(0, Math.min(1, (Pv[0] * F[0] + Pv[1] * F[1] + Pv[2] * F[2]) / FF)) : 1;
-      A[i] = a * own;
-      D[i * 4] = data[f * 4]; D[i * 4 + 1] = data[f * 4 + 1]; D[i * 4 + 2] = data[f * 4 + 2];
-    }
-    return { A, D };
-  }
-
+<script type="text/plain" id="vz-core">
+  const hyp = (x, y, z = 0) => Math.sqrt(x * x + y * y + z * z);
   function colourDist(r1, g1, b1, r2, g2, b2) {
     const rm = (r1 + r2) / 2, dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
     return (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
@@ -513,7 +322,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       merged = false;
       for (const a of alive) for (const b of alive) {
         if (a === b || share[a] < share[b]) continue;
-        if (Math.hypot(C[a][0] - C[b][0], C[a][1] - C[b][1], C[a][2] - C[b][2]) < 34) {
+        if (hyp(C[a][0] - C[b][0], C[a][1] - C[b][1], C[a][2] - C[b][2]) < 34) {
           const w = share[a] + share[b];
           C[a] = C[a].map((v, q) => (v * share[a] + C[b][q] * share[b]) / w);
           share[a] = w;
@@ -537,7 +346,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
           if (L2 < 1) continue;
           const t = (ab[0] * ap[0] + ab[1] * ap[1] + ab[2] * ap[2]) / L2;
           if (t < 0.06 || t > 0.94) continue;
-          const d = Math.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
+          const d = hyp(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
           if (d < 14 + 0.06 * Math.sqrt(L2)) blend = true;
         }
         if (blend) { alive = alive.filter(i => i !== c); changed = true; break; }
@@ -632,57 +441,88 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   // ---------- marching squares on a soft field, sub-pixel contour ----------
   function contours(field, fw, fh, ox, oy, T = 0.5) {
     // field: (fw x fh) samples at pixel centres, already padded by a ring of zeros.
-    // sample (u, v) sits at image coordinates (ox + u - 0.5, oy + v - 0.5)
-    const nb = new Map();
-    const pt = new Map();
-    const link = (a, b) => {
-      let x = nb.get(a); if (x) x.push(b); else nb.set(a, [b]);
-      x = nb.get(b); if (x) x.push(a); else nb.set(b, [a]);
+    // sample (u, v) sits at image coordinates (ox + u - 0.5, oy + v - 0.5).
+    // Every crossing point lies on a grid edge (2 per sample: right, down) and
+    // joins exactly two segments: kept in flat typed arrays, no maps.
+    // ids of crossing points: horizontal edges of the current and next row
+    // and vertical edges of the current row (only these can be shared)
+    let hTop = new Int32Array(fw).fill(-1), hBot = new Int32Array(fw).fill(-1);
+    const vRow = new Int32Array(fw);
+    let cap = 1024, n = 0;
+    let px = new Float64Array(cap), py = new Float64Array(cap);
+    let nb0 = new Int32Array(cap).fill(-1), nb1 = new Int32Array(cap).fill(-1);
+    const grow = () => {
+      cap *= 2;
+      const a = new Float64Array(cap); a.set(px); px = a;
+      const b = new Float64Array(cap); b.set(py); py = b;
+      const c = new Int32Array(cap).fill(-1); c.set(nb0); nb0 = c;
+      const d = new Int32Array(cap).fill(-1); d.set(nb1); nb1 = d;
     };
-    const hKey = (u, v) => (v * fw + u) * 2, vKey = (u, v) => (v * fw + u) * 2 + 1;
-    const hPt = (u, v, a, b) => { const k = hKey(u, v); if (!pt.has(k)) { const t = (T - a) / (b - a); pt.set(k, [ox + u + t - 0.5, oy + v - 0.5]); } return k; };
-    const vPt = (u, v, a, b) => { const k = vKey(u, v); if (!pt.has(k)) { const t = (T - a) / (b - a); pt.set(k, [ox + u - 0.5, oy + v + t - 0.5]); } return k; };
+    const link = (a, b) => {
+      if (nb0[a] < 0) nb0[a] = b; else nb1[a] = b;
+      if (nb0[b] < 0) nb0[b] = a; else nb1[b] = a;
+    };
+    const hPt = (ids, u, v, a, b) => {
+      let k = ids[u];
+      if (k < 0) {
+        if (n === cap) grow();
+        k = ids[u] = n++;
+        px[k] = ox + u + (T - a) / (b - a) - 0.5; py[k] = oy + v - 0.5;
+      }
+      return k;
+    };
+    const vPt = (u, v, a, b) => {
+      let k = vRow[u];
+      if (k < 0) {
+        if (n === cap) grow();
+        k = vRow[u] = n++;
+        px[k] = ox + u - 0.5; py[k] = oy + v + (T - a) / (b - a) - 0.5;
+      }
+      return k;
+    };
     for (let v = 0; v < fh - 1; v++) {
       const r0 = v * fw, r1 = r0 + fw;
+      vRow.fill(-1);
       for (let u = 0; u < fw - 1; u++) {
         const tl = field[r0 + u], tr = field[r0 + u + 1], br = field[r1 + u + 1], bl = field[r1 + u];
         const c = (tl > T ? 8 : 0) | (tr > T ? 4 : 0) | (br > T ? 2 : 0) | (bl > T ? 1 : 0);
         if (c === 0 || c === 15) continue;
-        const Tt = () => hPt(u, v, tl, tr), Bt = () => hPt(u, v + 1, bl, br);
-        const Lt = () => vPt(u, v, tl, bl), Rt = () => vPt(u + 1, v, tr, br);
         switch (c) {
-          case 1: case 14: link(Lt(), Bt()); break;
-          case 2: case 13: link(Bt(), Rt()); break;
-          case 3: case 12: link(Lt(), Rt()); break;
-          case 4: case 11: link(Tt(), Rt()); break;
-          case 6: case 9: link(Tt(), Bt()); break;
-          case 7: case 8: link(Tt(), Lt()); break;
+          case 1: case 14: link(vPt(u, v, tl, bl), hPt(hBot, u, v + 1, bl, br)); break;
+          case 2: case 13: link(hPt(hBot, u, v + 1, bl, br), vPt(u + 1, v, tr, br)); break;
+          case 3: case 12: link(vPt(u, v, tl, bl), vPt(u + 1, v, tr, br)); break;
+          case 4: case 11: link(hPt(hTop, u, v, tl, tr), vPt(u + 1, v, tr, br)); break;
+          case 6: case 9: link(hPt(hTop, u, v, tl, tr), hPt(hBot, u, v + 1, bl, br)); break;
+          case 7: case 8: link(hPt(hTop, u, v, tl, tr), vPt(u, v, tl, bl)); break;
           case 5: {
             const centre = (tl + tr + br + bl) / 4 > T;
-            if (centre) { link(Tt(), Lt()); link(Bt(), Rt()); } else { link(Tt(), Rt()); link(Lt(), Bt()); }
+            if (centre) { link(hPt(hTop, u, v, tl, tr), vPt(u, v, tl, bl)); link(hPt(hBot, u, v + 1, bl, br), vPt(u + 1, v, tr, br)); }
+            else { link(hPt(hTop, u, v, tl, tr), vPt(u + 1, v, tr, br)); link(vPt(u, v, tl, bl), hPt(hBot, u, v + 1, bl, br)); }
             break;
           }
           case 10: {
             const centre = (tl + tr + br + bl) / 4 > T;
-            if (centre) { link(Tt(), Rt()); link(Lt(), Bt()); } else { link(Tt(), Lt()); link(Bt(), Rt()); }
+            if (centre) { link(hPt(hTop, u, v, tl, tr), vPt(u + 1, v, tr, br)); link(vPt(u, v, tl, bl), hPt(hBot, u, v + 1, bl, br)); }
+            else { link(hPt(hTop, u, v, tl, tr), vPt(u, v, tl, bl)); link(hPt(hBot, u, v + 1, bl, br), vPt(u + 1, v, tr, br)); }
             break;
           }
         }
       }
+      const t = hTop; hTop = hBot; hBot = t; hBot.fill(-1);
     }
+    // points are numbered in the order they were first linked
     const loops = [];
-    const done = new Set();
-    for (const start of nb.keys()) {
-      if (done.has(start)) continue;
+    const done = new Uint8Array(n);
+    for (let start = 0; start < n; start++) {
+      if (done[start]) continue;
       const loop = [];
       let prev = -1, cur = start;
       while (true) {
-        done.add(cur);
-        loop.push(pt.get(cur));
-        const ns = nb.get(cur);
-        const next = ns[0] !== prev ? ns[0] : ns[1];
+        done[cur] = 1;
+        loop.push([px[cur], py[cur]]);
+        const next = nb0[cur] !== prev ? nb0[cur] : nb1[cur];
         prev = cur; cur = next;
-        if (cur === start || cur === undefined || done.has(cur)) break;
+        if (cur === start || cur < 0 || done[cur]) break;
       }
       if (loop.length >= 3) loops.push(loop);
     }
@@ -694,11 +534,11 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   function blur121(f, w, h) {
     const t = new Float32Array(f.length);
     for (let y = 0; y < h; y++) {
-      const r = y * w;
-      for (let x = 0; x < w; x++) {
-        const a = f[r + Math.max(0, x - 1)], b = f[r + x], c = f[r + Math.min(w - 1, x + 1)];
-        t[r + x] = (a + 2 * b + c) / 4;
-      }
+      const r = y * w, e = r + w - 1;
+      if (w === 1) { t[r] = f[r]; continue; }
+      t[r] = (3 * f[r] + f[r + 1]) / 4;
+      for (let i = r + 1; i < e; i++) t[i] = (f[i - 1] + 2 * f[i] + f[i + 1]) / 4;
+      t[e] = (f[e - 1] + 3 * f[e]) / 4;
     }
     for (let y = 0; y < h; y++) {
       const up = Math.max(0, y - 1) * w, r = y * w, dn = Math.min(h - 1, y + 1) * w;
@@ -761,7 +601,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   // ---------- corners and smoothing of the dense contour ----------
   function arcIndex(P) {
     const n = P.length, s = new Float64Array(n + 1);
-    for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; s[i + 1] = s[i] + Math.hypot(b[0] - a[0], b[1] - a[1]); }
+    for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; s[i + 1] = s[i] + hyp(b[0] - a[0], b[1] - a[1]); }
     return s;
   }
 
@@ -775,39 +615,65 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     const n = P.length;
     if (n < 8) return [];
     const s = arcIndex(P), L = s[n];
+    const sl = new Float64Array(n);                  // length of segment k -> k+1
+    for (let k = 0; k < n; k++) sl[k] = s[k + 1] - s[k];
+    const X = new Float64Array(n), Y = new Float64Array(n);
+    for (let k = 0; k < n; k++) { X[k] = P[k][0]; Y[k] = P[k][1]; }
     const skip = Math.min(1.5, L / 16), span = Math.min(skip + Math.max(2, w), L / 5);
     const lim = angDeg * Math.PI / 180;
-    // point at arc distance dist from i (dir = +1 / -1), linear along the segment
+    // point at arc distance dist from i (dir = +1 / -1), linear along the segment;
+    // the result goes to ax, ay (no allocation: this runs for every point)
+    let ax = 0, ay = 0;
     const at = (i, dist, dir) => {
       let acc = 0, a = i;
       for (let q = 0; q < n; q++) {
-        const b = (a + dir + n) % n;
-        const l = len(sub(P[b], P[a]));
+        const b = dir > 0 ? (a + 1 === n ? 0 : a + 1) : (a === 0 ? n - 1 : a - 1);
+        const l = dir > 0 ? sl[a] : sl[b];
         if (acc + l >= dist) {
           const t = l > 1e-12 ? (dist - acc) / l : 0;
-          return [P[a][0] + (P[b][0] - P[a][0]) * t, P[a][1] + (P[b][1] - P[a][1]) * t];
+          ax = X[a] + (X[b] - X[a]) * t; ay = Y[a] + (Y[b] - Y[a]) * t;
+          return;
         }
         acc += l; a = b;
       }
-      return P[a];
+      ax = X[a]; ay = Y[a];
+    };
+    // angle between (p0 -> p1) and (p2 -> p3), all taken with `at`
+    const turnOf = (i, sb, lb, sf, lf) => {
+      at(i, lb, -1); const x1 = ax, y1 = ay;
+      at(i, sb, -1); const x0 = ax, y0 = ay;
+      at(i, sf, 1); const x2 = ax, y2 = ay;
+      at(i, lf, 1); const x3 = ax, y3 = ay;
+      const v1x = x0 - x1, v1y = y0 - y1, v2x = x3 - x2, v2y = y3 - y2;
+      const l1 = hyp(v1x, v1y), l2 = hyp(v2x, v2y);
+      if (l1 < 1e-9 || l2 < 1e-9) return 0;
+      return Math.acos(Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (l1 * l2))));
     };
     const turn = new Float64Array(n);
-    for (let i = 0; i < n; i++) {
-      const b1 = at(i, span, -1), b0 = at(i, skip, -1), f0 = at(i, skip, 1), f1 = at(i, span, 1);
-      const v1 = sub(b0, b1), v2 = sub(f1, f0);
-      const l1 = len(v1), l2 = len(v2);
-      if (l1 < 1e-9 || l2 < 1e-9) continue;
-      turn[i] = Math.acos(Math.max(-1, Math.min(1, dot(v1, v2) / (l1 * l2))));
-    }
+    for (let i = 0; i < n; i++) turn[i] = turnOf(i, skip, span, skip, span);
     // a small round arc also turns a lot over a few pixels; a corner has
     // straight sides next to it. Moderate turns count as corners only then.
     const sideBend = (i, dir) => {
-      const a = at(i, skip, dir), m = at(i, (skip + span) / 2, dir), b = at(i, span, dir);
-      const u = sub(m, a), v = sub(b, m), lu = len(u), lv = len(v);
+      at(i, skip, dir); const x0 = ax, y0 = ay;
+      at(i, (skip + span) / 2, dir); const x1 = ax, y1 = ay;
+      at(i, span, dir); const x2 = ax, y2 = ay;
+      const ux = x1 - x0, uy = y1 - y0, vx = x2 - x1, vy = y2 - y1;
+      const lu = hyp(ux, uy), lv = hyp(vx, vy);
       if (!lu || !lv) return 0;
-      return Math.acos(Math.max(-1, Math.min(1, dot(u, v) / (lu * lv))));
+      return Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (lu * lv))));
     };
     const bendLim = 11 * Math.PI / 180;
+    // local maximum of `arr` within arc distance `win`
+    const isLocalMax = (arr, i, win) => {
+      let d = 0;
+      for (let q = 1; q < n && d < win; q++) {
+        const a = (i + q) % n, b = (i - q + n) % n;
+        d += sl[(a - 1 + n) % n];
+        if (arr[a] > arr[i] || (arr[a] === arr[i] && a < i)) return false;
+        if (arr[b] > arr[i] || (arr[b] === arr[i] && b < i)) return false;
+      }
+      return true;
+    };
     const out = [];
     for (let i = 0; i < n; i++) {
       if (turn[i] < lim) continue;
@@ -815,42 +681,19 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         // curved sides: still a corner when the bend is concentrated in one
         // point (the waist of "В" between its two bowls) - an arc turns half as
         // much over a window half as long, a kink turns almost as much
-        const v1 = sub(at(i, 0.6, -1), at(i, 2.2, -1)), v2 = sub(at(i, 2.2, 1), at(i, 0.6, 1));
-        const l1 = len(v1), l2 = len(v2);
-        const t2 = l1 && l2 ? Math.acos(Math.max(-1, Math.min(1, dot(v1, v2) / (l1 * l2)))) : 0;
+        const t2 = turnOf(i, 0.6, 2.2, 0.6, 2.2);
         if (t2 / turn[i] < 0.66) continue;
       }
-      let isMax = true, d = 0;
-      for (let q = 1; q < n && d < span && isMax; q++) {
-        const a = (i + q) % n, b = (i - q + n) % n;
-        d += len(sub(P[a], P[(a - 1 + n) % n]));
-        if (turn[a] > turn[i] || (turn[a] === turn[i] && a < i)) isMax = false;
-        if (turn[b] > turn[i] || (turn[b] === turn[i] && b < i)) isMax = false;
-      }
-      if (isMax) out.push(i);
+      if (isLocalMax(turn, i, span)) out.push(i);
     }
     out.turn = turn;
     // narrow ends: the turn over a longer stretch (about 8 px each side)
     const spanL = Math.min(skip + Math.max(6.5, 2.5 * w), L / 4);
     const turnL = new Float64Array(n);
-    for (let i = 0; i < n; i++) {
-      const v1 = sub(at(i, skip, -1), at(i, spanL, -1)), v2 = sub(at(i, spanL, 1), at(i, skip, 1));
-      const l1 = len(v1), l2 = len(v2);
-      if (l1 > 1e-9 && l2 > 1e-9) turnL[i] = Math.acos(Math.max(-1, Math.min(1, dot(v1, v2) / (l1 * l2))));
-    }
+    for (let i = 0; i < n; i++) turnL[i] = turnOf(i, skip, spanL, skip, spanL);
     out.turnL = turnL;
     out.uturns = [];
-    for (let i = 0; i < n; i++) {
-      if (turnL[i] < 1.75) continue;
-      let isMax = true, d = 0;
-      for (let q = 1; q < n && d < spanL && isMax; q++) {
-        const a = (i + q) % n, b = (i - q + n) % n;
-        d += len(sub(P[a], P[(a - 1 + n) % n]));
-        if (turnL[a] > turnL[i] || (turnL[a] === turnL[i] && a < i)) isMax = false;
-        if (turnL[b] > turnL[i] || (turnL[b] === turnL[i] && b < i)) isMax = false;
-      }
-      if (isMax) out.uturns.push(i);
-    }
+    for (let i = 0; i < n; i++) if (turnL[i] >= 1.75 && isLocalMax(turnL, i, spanL)) out.uturns.push(i);
     return out;
   }
 
@@ -1519,7 +1362,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   const addv = (a, b) => [a[0] + b[0], a[1] + b[1]];
   const mul = (a, s) => [a[0] * s, a[1] * s];
   const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
-  const len = a => Math.hypot(a[0], a[1]);
+  const len = a => hyp(a[0], a[1]);
   const norm = a => { const l = len(a); return l > 1e-12 ? [a[0] / l, a[1] / l] : [0, 0]; };
   function bez(b, t) {
     const u = 1 - t, a = u * u * u, c = 3 * u * u * t, d = 3 * u * t * t, e = t * t * t;
@@ -1669,7 +1512,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         let ok = true;
         for (const q of P) {
           const ex = (q[0] - E.cx) / E.rx, ey = (q[1] - E.cy) / E.ry;
-          const r = Math.hypot(ex, ey);
+          const r = hyp(ex, ey);
           if (Math.abs(r - 1) * Math.min(E.rx, E.ry) > dev) { ok = false; break; }
         }
         if (ok) {
@@ -1787,18 +1630,25 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   // colours it is a mix of.
   function fixBlendPixels(labels, D, A, W, H, C) {
     const out = labels.slice();
+    const offs = [-W - 1, -W, -W + 1, -1, 1, W - 1, W, W + 1];
+    const nbuf = new Int32Array(8);
     for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
       const i = y * W + x, own = labels[i];
       if (own < 0) continue;
-      let same = 0;
-      const nb = [];
-      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-        if (!dx && !dy) continue;
-        const l = labels[i + dy * W + dx];
+      // neighbours: same colour count and the other colours (in scan order);
+      // three of the same colour already settle it
+      let same = 0, nn = 0;
+      for (let q = 0; q < 8 && same <= 2; q++) {
+        const l = labels[i + offs[q]];
         if (l === own) same++;
-        else if (l >= 0 && !nb.includes(l)) nb.push(l);
+        else if (l >= 0) {
+          let seen = false;
+          for (let e = 0; e < nn; e++) if (nbuf[e] === l) { seen = true; break; }
+          if (!seen) nbuf[nn++] = l;
+        }
       }
-      if (same > 2 || nb.length < 1) continue;
+      if (same > 2 || nn < 1) continue;
+      const nb = Array.from(nbuf.subarray(0, nn));
       const p = [D[i * 4], D[i * 4 + 1], D[i * 4 + 2]];
       let best = -1, bestPerp = 26;
       const cand = nb.length >= 2 ? nb : [];
@@ -1809,7 +1659,7 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
         if (L2 < 1) continue;
         const t = (ab[0] * ap[0] + ab[1] * ap[1] + ab[2] * ap[2]) / L2;
         if (t < -0.1 || t > 1.1) continue;
-        const perp = Math.hypot(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
+        const perp = hyp(ap[0] - t * ab[0], ap[1] - t * ab[1], ap[2] - t * ab[2]);
         if (perp < bestPerp) { bestPerp = perp; best = t < 0.5 ? cand[a] : cand[b]; }
       }
       if (best < 0 && same === 0 && nb.length === 1) best = nb[0];   // a lone speck inside one colour
@@ -1825,20 +1675,18 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     for (let y = 0; y < h; y++) {
       const o = y * w; let acc = 0;
       for (let x = -r; x <= r; x++) acc += f[o + Math.min(w - 1, Math.max(0, x))];
-      for (let x = 0; x < w; x++) {
-        t[x] = acc * k;
-        acc += f[o + Math.min(w - 1, x + r + 1)] - f[o + Math.max(0, x - r)];
-      }
+      const xa = Math.min(w, r), xb = Math.max(xa, w - r - 1);
+      for (let x = 0; x < xa; x++) { t[x] = acc * k; acc += f[o + Math.min(w - 1, x + r + 1)] - f[o + Math.max(0, x - r)]; }
+      for (let x = xa; x < xb; x++) { t[x] = acc * k; acc += f[o + x + r + 1] - f[o + x - r]; }
+      for (let x = xb; x < w; x++) { t[x] = acc * k; acc += f[o + Math.min(w - 1, x + r + 1)] - f[o + Math.max(0, x - r)]; }
       for (let x = 0; x < w; x++) f[o + x] = t[x];
     }
-    for (let x = 0; x < w; x++) {
-      let acc = 0;
-      for (let y = -r; y <= r; y++) acc += f[Math.min(h - 1, Math.max(0, y)) * w + x];
-      for (let y = 0; y < h; y++) {
-        t[y] = acc * k;
-        acc += f[Math.min(h - 1, y + r + 1) * w + x] - f[Math.max(0, y - r) * w + x];
-      }
-      for (let y = 0; y < h; y++) f[y * w + x] = t[y];
+    // vertical pass row by row (same sums per column, cache friendly)
+    const acc = new Float64Array(w), src = f.slice();
+    for (let y = -r; y <= r; y++) { const o = Math.min(h - 1, Math.max(0, y)) * w; for (let x = 0; x < w; x++) acc[x] += src[o + x]; }
+    for (let y = 0; y < h; y++) {
+      const o = y * w, oa = Math.min(h - 1, y + r + 1) * w, os = Math.max(0, y - r) * w;
+      for (let x = 0; x < w; x++) { f[o + x] = acc[x] * k; acc[x] += src[oa + x] - src[os + x]; }
     }
   }
 
@@ -1870,6 +1718,519 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
   }
 
   // ---------- the whole trace ----------
+
+  // One colour layer: field -> contours -> filters -> SVG path data. Pure, so
+  // it runs the same in a background worker or on the page.
+  // one colour layer: its outlines (with hole flags), then the fitted paths.
+  // The two halves are separate so workers can share out the fitting.
+  function traceLayer(job) {
+    const r = layerLoops(job);
+    const f = fitLoops(r.loops, r.holes, job.opts);
+    return { d: f.d, nodes: f.nodes, paths: r.loops.length, loops: job.wantLoops ? r.loops : null };
+  }
+  function fitLoops(loops, holes, opts) {
+    let d = '', nodes = 0;
+    for (let k = 0; k < loops.length; k++) {
+      const r = loopToPath(loops[k], opts, holes[k]);
+      d += r.d; nodes += r.nodes;
+    }
+    return { d, nodes };
+  }
+  function layerLoops(job) {
+    const { labels, A, W, H, K, order, j, bbs, cut, speck, opts } = job;
+    const inS = new Uint8Array(K), own = order[j];
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let q = j; q < order.length; q++) {
+      const l = order[q]; inS[l] = 1; const b = bbs[l];
+      x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
+    }
+    if (x1 < 0) return { loops: [], holes: [] };
+    const fw = x1 - x0 + 3, fh = y1 - y0 + 3;
+    const field = new Float32Array(fw * fh);
+    const k2 = 1 / (2 * cut);
+    const top = j === order.length - 1;
+    // colours drawn above this layer are covered by their own shapes: near
+    // the edge this layer pulls back under them (by more than the fitting
+    // tolerance), so its own fitting error never peeks out. The pull-back
+    // follows a blurred mask, so the hidden edge stays round (few nodes).
+    let M = null, E = null;
+    if (!top) {
+      const tuck = Math.max(1.5, 2 * opts.tol + 1);
+      M = new Uint8Array(fw * fh);
+      E = new Uint8Array(fw * fh);
+      // the masks are also summed straight into half size copies (2x2 means)
+      const hw = (fw + 1) >> 1, hh = (fh + 1) >> 1;
+      const Mh = new Float32Array(hw * hh), Eh = new Float32Array(hw * hh);
+      let upper = 0;
+      for (let v = 1; v < fh - 1; v++) {
+        const row = (y0 + v - 1) * W, hv = (v >> 1) * hw;
+        for (let u = 1; u < fw - 1; u++) {
+          const i = row + x0 + u - 1, l = labels[i];
+          if (l >= 0 && inS[l] && A[i] >= cut) { M[v * fw + u] = 1; Mh[hv + (u >> 1)] += 0.25; if (l !== own) upper++; }
+        }
+      }
+      if (upper) {
+        // where this layer's own edge meets an upper colour on the same outline
+        // (a thin snow tip lying on the slope of the mountain) the edge must run
+        // straight on: no pulling back near such a meeting point
+        for (let v = 1; v < fh - 1; v++) {
+          const row = (y0 + v - 1) * W + x0 - 1, hv = (v >> 1) * hw;
+          for (let u = 1; u < fw - 1; u++) {
+            const k = v * fw + u;
+            if (!M[k]) continue;
+            if (labels[row + u] !== own) continue;
+            if (!M[k - 1] || !M[k + 1] || !M[k - fw] || !M[k + fw]) { E[k] = 1; Eh[hv + (u >> 1)] += 0.25; }
+          }
+        }
+        // both masks are smooth after blurring: blur them at half size (4x
+        // less work) and read them back with bilinear sampling
+        const sigma = tuck / 1.5;
+        const r = Math.max(1, Math.round(Math.sqrt(4 * (sigma / 2) * (sigma / 2) + 1) / 2));
+        boxBlur(Mh, hw, hh, r); boxBlur(Mh, hw, hh, r); boxBlur(Mh, hw, hh, r);
+        const re = Math.max(1, Math.round(tuck / 2));
+        boxBlur(Eh, hw, hh, re); boxBlur(Eh, hw, hh, re);
+        const sampleHalf = (h, u, v) => {
+          const x = Math.max(0, Math.min(hw - 1.001, (u - 0.5) / 2)), y = Math.max(0, Math.min(hh - 1.001, (v - 0.5) / 2));
+          const x0 = x | 0, y0 = y | 0, fx = x - x0, fy = y - y0, k = y0 * hw + x0;
+          const a = h[k], b = h[k + 1 < h.length ? k + 1 : k], c = h[k + hw < h.length ? k + hw : k], d = h[k + hw + 1 < h.length ? k + hw + 1 : k];
+          return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
+        };
+        M = { at: (u, v) => sampleHalf(Mh, u, v) };
+        E = { at: (u, v) => sampleHalf(Eh, u, v) };
+      } else { M = null; E = null; }
+    }
+    for (let v = 1; v < fh - 1; v++) {
+      const row = (y0 + v - 1) * W;
+      for (let u = 1; u < fw - 1; u++) {
+        const i = row + x0 + u - 1, l = labels[i];
+        if (!(l >= 0 && inS[l])) continue;
+        const a = Math.min(1, A[i] * k2);
+        if (l === own || !M) field[v * fw + u] = a;
+        else if (E.at(u, v) > 0.05) field[v * fw + u] = a;
+        else field[v * fw + u] = a * Math.max(0, Math.min(1, 0.5 + (M.at(u, v) - 0.93) * 8));
+      }
+    }
+    blur121(field, fw, fh);
+    let loops = contours(field, fw, fh, x0, y0);
+    loops = loops.filter(L => Math.abs(area(L)) >= Math.max(speck, 0.5));
+    // a loop inside an odd number of others is a hole (even-odd fill)
+    const inside = (pt, Q) => {
+      let c = false;
+      for (let i = 0, k = Q.length - 1; i < Q.length; k = i++) {
+        if ((Q[i][1] > pt[1]) !== (Q[k][1] > pt[1]) &&
+            pt[0] < (Q[k][0] - Q[i][0]) * (pt[1] - Q[i][1]) / (Q[k][1] - Q[i][1]) + Q[i][0]) c = !c;
+      }
+      return c;
+    };
+    const boxes = loops.map(Q => { let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity; for (const q of Q) { if (q[0] < a) a = q[0]; if (q[1] < b) b = q[1]; if (q[0] > c) c = q[0]; if (q[1] > e) e = q[1]; } return [a, b, c, e]; });
+    // long loops get their edges bucketed by row, so a point test only
+    // looks at the edges that can cross its row (same result, far less work)
+    const rowIdx = [];
+    const insideFast = (pt, m) => {
+      const Q = loops[m];
+      if (Q.length < 64) return inside(pt, Q);
+      let ix = rowIdx[m];
+      if (!ix) {
+        const by = Math.floor(boxes[m][1]), nb = Math.floor(boxes[m][3]) - by + 1;
+        const cnt = new Int32Array(nb + 1);
+        for (let i = 0, k = Q.length - 1; i < Q.length; k = i++) {
+          const a = Math.floor(Math.min(Q[i][1], Q[k][1])) - by, b = Math.floor(Math.max(Q[i][1], Q[k][1])) - by;
+          for (let r = a; r <= b; r++) cnt[r + 1]++;
+        }
+        for (let r = 0; r < nb; r++) cnt[r + 1] += cnt[r];
+        const ed = new Int32Array(cnt[nb]), fill = cnt.slice(0, nb);
+        for (let i = 0, k = Q.length - 1; i < Q.length; k = i++) {
+          const a = Math.floor(Math.min(Q[i][1], Q[k][1])) - by, b = Math.floor(Math.max(Q[i][1], Q[k][1])) - by;
+          for (let r = a; r <= b; r++) ed[fill[r]++] = i;
+        }
+        ix = rowIdx[m] = { by, nb, cnt, ed };
+      }
+      const r = Math.floor(pt[1]) - ix.by;
+      if (r < 0 || r >= ix.nb) return false;
+      let c = false;
+      for (let e = ix.cnt[r]; e < ix.cnt[r + 1]; e++) {
+        const i = ix.ed[e], k = i === 0 ? Q.length - 1 : i - 1;
+        if ((Q[i][1] > pt[1]) !== (Q[k][1] > pt[1]) &&
+            pt[0] < (Q[k][0] - Q[i][0]) * (pt[1] - Q[i][1]) / (Q[k][1] - Q[i][1]) + Q[i][0]) c = !c;
+      }
+      return c;
+    };
+    let holes = loops.map((Q, k) => {
+      let depth = 0;
+      const pt = Q[0];
+      for (let m = 0; m < loops.length; m++) {
+        if (m === k) continue;
+        const bx = boxes[m];
+        if (pt[0] < bx[0] || pt[0] > bx[2] || pt[1] < bx[1] || pt[1] > bx[3]) continue;
+        if (insideFast(pt, m)) depth++;
+      }
+      return depth % 2 === 1;
+    });
+    const keepIdx = loops.map((L, k) => k).filter(k => {
+      const L = loops[k];
+      const A2 = Math.abs(area(L));
+      if (A2 < Math.max(speck, 0.5)) return false;
+      // hair-thin slivers left between colours (under 1 px wide on average)
+      let per = 0;
+      for (let i = 0; i < L.length; i++) { const a = L[(i + 1) % L.length], b = L[i]; per += hyp(a[0] - b[0], a[1] - b[1]); }
+      if (speck > 0 && A2 < 6 * speck && 2 * A2 / per < 1.0) return false;
+      // a small piece of a lower layer with none of its own colour inside is
+      // only an underlay for the colours above; it can only peek out as a sliver
+      if (!top && A2 < 2500 && !holes[k]) {
+        const bx = boxes[k];
+        let ownN = 0;
+        // even-odd test per pixel, with the edge crossings found once per row:
+        // sorted, the inside runs are [xs0, xs1), [xs2, xs3)... Stops as soon
+        // as enough own pixels are found.
+        const need = Math.max(2, 0.03 * A2);
+        const xs = [];
+        const xa = Math.max(0, Math.floor(bx[0])), xb = Math.min(W - 1, Math.ceil(bx[2]));
+        for (let y = Math.max(0, Math.floor(bx[1])); y <= Math.min(H - 1, Math.ceil(bx[3])) && ownN < need; y++) {
+          const py = y + 0.5;
+          xs.length = 0;
+          for (let i = 0, q = L.length - 1; i < L.length; q = i++) {
+            if ((L[i][1] > py) !== (L[q][1] > py)) xs.push((L[q][0] - L[i][0]) * (py - L[i][1]) / (L[q][1] - L[i][1]) + L[i][0]);
+          }
+          if (xs.length < 2) continue;
+          xs.sort((p, q) => p - q);
+          for (let e = 0; e + 1 < xs.length; e += 2) {
+            const lo = xs[e], hi = xs[e + 1];
+            for (let x = Math.max(xa, Math.floor(lo - 0.5) - 1); x <= xb; x++) {
+              const pxx = x + 0.5;
+              if (pxx >= hi) break;
+              if (pxx < lo) continue;
+              const i = y * W + x;
+              if (labels[i] === own && A[i] >= cut) ownN++;
+            }
+          }
+        }
+        if (ownN < Math.max(2, 0.03 * A2)) return false;
+      }
+      return true;
+    });
+    holes = keepIdx.map(k => holes[k]);
+    loops = keepIdx.map(k => loops[k]);
+    return { loops, holes };
+  }
+  // outlines travel between threads as flat number arrays
+  function packLoops(loops) {
+    return loops.map(L => { const f = new Float64Array(L.length * 2); for (let i = 0; i < L.length; i++) { f[2 * i] = L[i][0]; f[2 * i + 1] = L[i][1]; } return f; });
+  }
+  function unpackLoops(flat) {
+    return flat.map(f => { const L = new Array(f.length >> 1); for (let i = 0; i < L.length; i++) L[i] = [f[2 * i], f[2 * i + 1]]; return L; });
+  }
+
+</script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const radio = name => document.querySelector(`input[name=${name}]:checked`).value;
+  const ui = {
+    colors: $('colors'), alpha: $('alpha'), tol: $('tol'), relax: $('relax'), corner: $('corner'),
+    speck: $('speck'), thin: $('thin'), bgTol: $('bgTol'), maxSide: $('maxSide'), monoOwn: $('monoOwn'), monoColor: $('monoColor'),
+  };
+  // the tracing code lives in one text block: the page runs it, and the same
+  // text starts background workers that trace the colour layers in parallel
+  const CORE_SRC = document.getElementById('vz-core').textContent;
+  const core = new Function(CORE_SRC + '\nreturn { colourDist, dropBlends, palette, contours, blur121, relax, area, simplify, arcIndex, findCorners, fitEllipse, hull2d, splitUTurns, relaxPinned, refineCorners, loopToPath, fmt, hex, hexToRgb, fixBlendPixels, boxBlur, traceLayer, layerLoops, fitLoops, packLoops, unpackLoops, sub, len };')();
+  const { colourDist, dropBlends, palette, contours, blur121, relax, area, simplify, arcIndex, findCorners, fitEllipse, hull2d, splitUTurns, relaxPinned, refineCorners, loopToPath, fmt, hex, hexToRgb, fixBlendPixels, boxBlur, traceLayer, layerLoops, fitLoops, packLoops, unpackLoops, sub, len } = core;
+  const sleep = () => new Promise(r => setTimeout(r, 0));
+  let src = null;          // {img, name, w, h}
+  let prep = null;         // {W, H, data, sx, sy, key}
+  let result = null;
+  let view = 'split';
+  let downloads = null;
+  let runId = 0;
+
+  const CURVE_HINTS = {
+    bezier: 'Кубические кривые Безье подгоняются к контуру: меньше всего узлов при круглых формах.',
+    spline: 'Гладкий сплайн (как NURBS) через упрощённые точки: самые мягкие переходы, плавность второго порядка.',
+    poly: 'Только прямые отрезки между узлами.',
+  };
+
+  function syncLabels() {
+    $('colorsVal').textContent = ui.colors.value;
+    $('alphaVal').textContent = ui.alpha.value + '%';
+    $('tolVal').textContent = tolPx().toFixed(1) + ' px';
+    $('relaxVal').textContent = ui.relax.value === '0' ? 'выкл' : ui.relax.value;
+    $('cornerVal').textContent = ui.corner.value + '°';
+    $('speckVal').textContent = ui.speck.value + ' px²';
+    $('thinVal').textContent = ui.thin.value === '0' ? 'выкл' : ui.thin.value + '%';
+    $('bgTolVal').textContent = ui.bgTol.value + '%';
+    const mono = radio('mode') === 'mono';
+    $('colorsCtl').hidden = mono;
+    $('monoCtl').hidden = !mono;
+    $('bgTolCtl').hidden = radio('bg') === 'keep';
+    $('curveHint').textContent = CURVE_HINTS[radio('curve')];
+  }
+
+  // "Точность": the slider moves to the right for more precision, so the
+  // allowed deviation goes down from 8 px to 0.2 px
+  const tolPx = () => Math.round((8.2 - +ui.tol.value) * 10) / 10;
+
+  function setStatus(text, cls) {
+    const s = $('status'); s.textContent = text; s.className = 'status' + (cls ? ' ' + cls : '');
+  }
+
+  // ---------- sample image ----------
+  function sampleImage() {
+    const c = document.createElement('canvas'); c.width = 520; c.height = 520;
+    const g = c.getContext('2d');
+    g.translate(260, 260);
+    g.fillStyle = '#1f3a5f'; g.beginPath(); g.arc(0, 0, 230, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#f2c14e'; g.beginPath(); g.arc(70, -70, 52, 0, Math.PI * 2); g.fill();
+    g.save(); g.beginPath(); g.arc(0, 0, 230, 0, Math.PI * 2); g.clip();
+    g.fillStyle = '#7fb7be';
+    g.beginPath(); g.moveTo(-260, 120); g.lineTo(-120, -40); g.lineTo(-40, 50); g.lineTo(40, -10); g.lineTo(260, 140); g.lineTo(260, 260); g.lineTo(-260, 260); g.fill();
+    g.fillStyle = '#eef2f3';
+    g.beginPath(); g.moveTo(-120, -40); g.lineTo(-80, 6); g.lineTo(-100, 0); g.lineTo(-120, 18); g.lineTo(-140, -18); g.fill();
+    g.fillStyle = '#2d6a4f';
+    g.beginPath(); g.moveTo(-260, 170);
+    for (let x = -260; x <= 260; x += 20) g.lineTo(x, 150 + 18 * Math.sin(x / 40));
+    g.lineTo(260, 260); g.lineTo(-260, 260); g.fill();
+    g.restore();
+    g.strokeStyle = '#e4572e'; g.lineWidth = 14; g.beginPath(); g.arc(0, 0, 238, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = '#ffffff'; g.font = '600 46px Onest, system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText('ВЕРШИНА', 0, 195);
+    return c.toDataURL('image/png');
+  }
+
+  function loadFrom(url, name) {
+    const img = new Image();
+    img.onload = () => {
+      src = { img, name, w: img.naturalWidth, h: img.naturalHeight };
+      $('fileName').textContent = name;
+      $('sizeBadge').textContent = img.naturalWidth + '×' + img.naturalHeight;
+      $('orig').src = url;
+      prep = null;
+      const transparent = hasTransparency();
+      const auto = !transparent && cornersUniform();
+      $(auto ? 'bgAll' : 'bgKeep').checked = true;
+      syncLabels();
+      if (!transparent) {
+        setStatus(auto ? 'Прозрачности нет: однотонный фон убран.' : 'Прозрачности нет: фон станет частью рисунка.', 'warn');
+      }
+      fitView(false);
+      schedule(0);
+    };
+    img.onerror = () => setStatus('Не удалось открыть файл как изображение.', 'warn');
+    img.src = url;
+  }
+
+  // ---------- prepare pixels ----------
+  function getPrep() {
+    const maxSide = +ui.maxSide.value;
+    const key = src.name + '|' + maxSide + '|' + src.img.src.length;
+    if (prep && prep.key === key) return prep;
+    const scale = Math.min(1, maxSide / Math.max(src.w, src.h));
+    const W = Math.max(1, Math.round(src.w * scale)), H = Math.max(1, Math.round(src.h * scale));
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(src.img, 0, 0, W, H);
+    const data = g.getImageData(0, 0, W, H).data;
+    prep = { W, H, data, sx: src.w / W, sy: src.h / H, key };
+    return prep;
+  }
+  // real transparency, not a stray half-transparent edge row some files have
+  function hasTransparency() {
+    const p = getPrep(), d = p.data, W = p.W, H = p.H;
+    let n = 0, t = 0;
+    for (let y = 2; y < H - 2; y += 2) for (let x = 2; x < W - 2; x += 2) {
+      n++;
+      if (d[(y * W + x) * 4 + 3] < 250) t++;
+    }
+    return t > Math.max(3, 0.002 * n);
+  }
+  function cornersUniform() {
+    const p = getPrep(), d = p.data, W = p.W, H = p.H;
+    const idx = [0, W - 1, (H - 1) * W, H * W - 1].map(i => i * 4);
+    const c0 = idx[0];
+    return idx.every(i => Math.abs(d[i] - d[c0]) + Math.abs(d[i + 1] - d[c0 + 1]) + Math.abs(d[i + 2] - d[c0 + 2]) < 40);
+  }
+
+  // Alpha (0..1) and colours to trace. Background removal: a pixel close to
+  // the background colour is background; every other pixel keeps its colour
+  // fully (a light pink stays pink). Only the anti-aliased rim next to the
+  // background becomes partly transparent: it is un-mixed against the solid
+  // colour next to it, so edges keep sub-pixel accuracy.
+  function pixelsToTrace(p) {
+    const { W, H, data } = p, N = W * H;
+    const A = new Float32Array(N);
+    const mode = radio('bg');
+    if (mode === 'keep') {
+      for (let i = 0; i < N; i++) A[i] = data[i * 4 + 3] / 255;
+      return { A, D: data };
+    }
+    const D = new Uint8ClampedArray(data);
+    // background colour: median of the border pixels
+    const rs = [], gs = [], bs = [];
+    const take = (x, y) => { const i = (y * W + x) * 4; if (data[i + 3] > 200) { rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]); } };
+    for (let x = 0; x < W; x += Math.max(1, W >> 7)) { take(x, 0); take(x, H - 1); }
+    for (let y = 0; y < H; y += Math.max(1, H >> 7)) { take(0, y); take(W - 1, y); }
+    if (!rs.length) { for (let i = 0; i < N; i++) A[i] = data[i * 4 + 3] / 255; return { A, D: data }; }
+    const med = a => a.sort((u, v) => u - v)[a.length >> 1];
+    const bg = [med(rs), med(gs), med(bs)];
+    const tolD = 4 + +ui.bgTol.value / 100 * 255;      // colour distance that still counts as background
+    const dist = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+      const dr = data[i * 4] - bg[0], dg = data[i * 4 + 1] - bg[1], db = data[i * 4 + 2] - bg[2];
+      dist[i] = Math.sqrt(dr * dr + dg * dg + db * db);
+    }
+    const isBg = new Uint8Array(N);
+    if (mode === 'all') {
+      for (let i = 0; i < N; i++) if (dist[i] <= tolD || data[i * 4 + 3] < 8) isBg[i] = 1;
+    } else {
+      // only the background connected to the borders
+      const stack = new Int32Array(N);
+      let sp = 0;
+      const push = i => { if (!isBg[i] && (dist[i] <= tolD || data[i * 4 + 3] < 8)) { isBg[i] = 1; stack[sp++] = i; } };
+      for (let x = 0; x < W; x++) { push(x); push((H - 1) * W + x); }
+      for (let y = 0; y < H; y++) { push(y * W); push(y * W + W - 1); }
+      while (sp) {
+        const i = stack[--sp], x = i % W, y = (i / W) | 0;
+        if (x > 0) push(i - 1); if (x < W - 1) push(i + 1);
+        if (y > 0) push(i - W); if (y < H - 1) push(i + W);
+      }
+    }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x, own = data[i * 4 + 3] / 255;
+      if (isBg[i]) { A[i] = 0; continue; }
+      let edge = false;
+      for (let dy = -1; dy <= 1 && !edge; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx >= 0 && yy >= 0 && xx < W && yy < H && isBg[yy * W + xx]) { edge = true; break; }
+      }
+      if (!edge) { A[i] = own; continue; }
+      // the solid colour beside this rim pixel: the one furthest from the background
+      let f = i, fd = dist[i];
+      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+        const xx = x + dx, yy = y + dy;
+        if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+        const j = yy * W + xx;
+        if (!isBg[j] && dist[j] > fd) { fd = dist[j]; f = j; }
+      }
+      const F = [data[f * 4] - bg[0], data[f * 4 + 1] - bg[1], data[f * 4 + 2] - bg[2]];
+      const Pv = [data[i * 4] - bg[0], data[i * 4 + 1] - bg[1], data[i * 4 + 2] - bg[2]];
+      const FF = F[0] * F[0] + F[1] * F[1] + F[2] * F[2];
+      const a = FF > 1 ? Math.max(0, Math.min(1, (Pv[0] * F[0] + Pv[1] * F[1] + Pv[2] * F[2]) / FF)) : 1;
+      A[i] = a * own;
+      D[i * 4] = data[f * 4]; D[i * 4 + 1] = data[f * 4 + 1]; D[i * 4 + 2] = data[f * 4 + 2];
+    }
+    return { A, D };
+  }
+
+  // ---------- background workers ----------
+  let pool = null;            // [{ w, busy }]
+  const poolSize = () => Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1));
+  function makePool() {
+    try {
+      const glue = '\nself.onmessage = e => { const m = e.data; ' +
+        'if (m.type === "data") { self.D = m; return; } ' +
+        'if (m.type === "loops") { const r = layerLoops(Object.assign({}, self.D, m.job)); const flat = packLoops(r.loops); ' +
+        '  self.postMessage({ id: m.id, run: m.run, flat, holes: r.holes }, flat.map(f => f.buffer)); return; } ' +
+        'const r = fitLoops(unpackLoops(m.flat), m.holes, self.D.opts); self.postMessage({ id: m.id, run: m.run, r }); };';
+      const url = URL.createObjectURL(new Blob([CORE_SRC, glue], { type: 'text/javascript' }));
+      const ws = [];
+      for (let i = 0; i < poolSize(); i++) ws.push({ w: new Worker(url), busy: false });
+      URL.revokeObjectURL(url);
+      return ws;
+    } catch (e) {
+      return [];                    // no workers here: trace on the page
+    }
+  }
+  function killPool() { if (pool) for (const x of pool) x.w.terminate(); pool = null; }
+
+  // run all layer jobs; workers in parallel, or one by one on the page
+  function runLayers(id, shared, jobs, onDone) {
+    return new Promise(resolve => {
+      const results = new Array(jobs.length);
+      if (pool && pool.some(x => x.busy)) killPool();     // still busy with an old run: start fresh
+      if (!pool) pool = makePool();
+      if (!pool.length || jobs.length === 1 || window.__vzDebug || window.__vzNoWorkers) {
+        // on the page (also used for a single layer: no copying needed)
+        (async () => {
+          for (let k = 0; k < jobs.length; k++) {
+            await sleep();
+            if (id !== runId) return resolve(null);
+            results[k] = traceLayer(Object.assign({}, shared, jobs[k]));
+            if (window.__vzDebug) window.__vzDebug.push({ col: jobs[k].col, loops: results[k].loops, opts: shared.opts, findCorners, loopToPath, relax, splitUTurns, relaxPinned });
+            onDone(k);
+          }
+          resolve(results);
+        })();
+        return;
+      }
+      // two kinds of tasks: find a layer's outlines, then fit them. The fitting
+      // of a big layer is split into chunks so every worker shares it.
+      const ws = pool;
+      for (const x of ws) x.w.postMessage({ type: 'data', ...shared });
+      const queue = jobs.map((_, k) => ({ type: 'loops', k }));
+      const parts = new Array(jobs.length);
+      let finished = 0;
+      const layerDone = k => {
+        const P = parts[k];
+        results[k] = { d: P.d.join(''), nodes: P.nodes, paths: P.paths };
+        onDone(k);
+        if (++finished === jobs.length) resolve(results);
+      };
+      const gotLoops = (k, flat, holes) => {
+        const n = flat.length;
+        parts[k] = { d: [], nodes: 0, paths: n, left: 0 };
+        if (!n) return layerDone(k);
+        let total = 0;
+        for (const f of flat) total += f.length >> 1;
+        const target = Math.max(1500, total / ws.length);
+        const chunks = [];
+        let a = 0, acc = 0;
+        for (let i = 0; i < n; i++) {
+          acc += flat[i].length >> 1;
+          if (acc >= target || i === n - 1) { chunks.push([a, i + 1]); a = i + 1; acc = 0; }
+        }
+        parts[k].left = chunks.length;
+        // fitting goes first: a layer finishes as early as possible
+        queue.unshift(...chunks.map(([a, b], c) => ({ type: 'fit', k, c, flat: flat.slice(a, b), holes: holes.slice(a, b) })));
+      };
+      const gotFit = (t, r) => {
+        const P = parts[t.k];
+        P.d[t.c] = r.d; P.nodes += r.nodes;
+        if (--P.left === 0) layerDone(t.k);
+      };
+      // a task that failed in a worker is done here on the page instead
+      const onPage = t => {
+        if (t.type === 'loops') {
+          const r = layerLoops(Object.assign({}, shared, jobs[t.k]));
+          gotLoops(t.k, packLoops(r.loops), r.holes);
+        } else gotFit(t, fitLoops(unpackLoops(t.flat), t.holes, shared.opts));
+      };
+      const feed = x => {
+        if (finished === jobs.length) { x.busy = false; return; }
+        const t = queue.shift();
+        if (!t) { x.busy = false; return; }
+        x.busy = true;
+        x.w.onmessage = e => {
+          if (e.data.run !== id) return;
+          x.busy = false;
+          if (t.type === 'loops') gotLoops(t.k, e.data.flat, e.data.holes);
+          else gotFit(t, e.data.r);
+          wake();
+        };
+        x.w.onerror = ev => {
+          if (ev && ev.preventDefault) ev.preventDefault();
+          x.busy = false;
+          onPage(t);
+          wake();
+        };
+        if (t.type === 'loops') x.w.postMessage({ type: 'loops', id: t.k, run: id, job: jobs[t.k] });
+        else x.w.postMessage({ type: 'fit', id: t.k, run: id, flat: t.flat, holes: t.holes });
+      };
+      // give queued tasks to every idle worker
+      const wake = () => { if (id !== runId) return; for (const x of ws) if (!x.busy) feed(x); };
+      wake();
+    });
+  }
+
+  // ---------- the whole trace ----------
   async function trace(id) {
     const t0 = performance.now();
     const p = getPrep();
@@ -1887,11 +2248,16 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       for (let i = 0; i < N; i++) if (A[i] > 0.02) labels[i] = 0;
     } else {
       C = palette(pd, A, +ui.colors.value);
+      // nearest palette colour, remembered per exact colour (photos repeat colours a lot)
+      const memo = new Uint8Array(1 << 24);
       for (let i = 0; i < N; i++) {
         if (A[i] <= 0.02) continue;
-        const r = D[i * 4], g = D[i * 4 + 1], b = D[i * 4 + 2];
+        const r = D[i * 4], g = D[i * 4 + 1], b = D[i * 4 + 2], key = (r << 16) | (g << 8) | b;
+        const m = memo[key];
+        if (m) { labels[i] = m - 1; continue; }
         let best = 0, bd = Infinity;
         for (let c = 0; c < C.length; c++) { const d = colourDist(r, g, b, C[c][0], C[c][1], C[c][2]); if (d < bd) { bd = d; best = c; } }
+        memo[key] = best + 1;
         labels[i] = best;
       }
     }
@@ -1900,9 +2266,9 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
     const K = C.length;
     const cnt = new Float64Array(K), bb = Array.from({ length: K }, () => [W, H, -1, -1]);
     const sum = Array.from({ length: K }, () => [0, 0, 0]);
-    for (let i = 0; i < N; i++) {
+    for (let y = 0, i = 0; y < H; y++) for (let x = 0; x < W; x++, i++) {
       const l = labels[i]; if (l < 0 || A[i] < cut) continue;
-      cnt[l]++; const x = i % W, y = (i / W) | 0, q = bb[l];
+      cnt[l]++; const q = bb[l];
       if (x < q[0]) q[0] = x; if (y < q[1]) q[1] = y; if (x > q[2]) q[2] = x; if (y > q[3]) q[3] = y;
       sum[l][0] += D[i * 4]; sum[l][1] += D[i * 4 + 1]; sum[l][2] += D[i * 4 + 2];
     }
@@ -1914,135 +2280,20 @@ textarea { width: 100%; min-height: 140px; margin-top: 8px; font: 12px/1.4 var(-
       thin: +ui.thin.value / 100,
       sx: p.sx, sy: p.sy,
     };
-    const speck = +ui.speck.value;
+    const shared = { labels, A, W, H, K, order, bbs: bb, cut, speck: +ui.speck.value, opts };
+    const jobs = order.map((l, j) => ({ j, col: hex(fill[l]), wantLoops: !!window.__vzDebug }));
+    let doneN = 0;
+    setStatus(`Обработка… слои 0 из ${jobs.length}`, 'busy');
+    const res = await runLayers(id, shared, jobs, () => setStatus(`Обработка… слои ${++doneN} из ${jobs.length}`, 'busy'));
+    if (!res || id !== runId) return null;
     const paths = [], outlines = [];
     let nodes = 0, nPaths = 0;
-    for (let j = 0; j < order.length; j++) {
-      setStatus(`Обработка… слой ${j + 1} из ${order.length}`, 'busy');
-      await sleep();
-      if (id !== runId) return null;
-      const inS = new Uint8Array(K), own = order[j];
-      let x0 = W, y0 = H, x1 = -1, y1 = -1;
-      for (let q = j; q < order.length; q++) {
-        const l = order[q]; inS[l] = 1; const b = bb[l];
-        x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
-      }
-      if (x1 < 0) continue;
-      const fw = x1 - x0 + 3, fh = y1 - y0 + 3;
-      const field = new Float32Array(fw * fh);
-      const k2 = 1 / (2 * cut);
-      // colours drawn above this layer are covered by their own shapes: near
-      // the edge this layer pulls back under them (by more than the fitting
-      // tolerance), so its own fitting error never peeks out. The pull-back
-      // follows a blurred mask, so the hidden edge stays round (few nodes).
-      const tuck = Math.max(1.5, 2 * opts.tol + 1);
-      const M = new Float32Array(fw * fh);
-      for (let v = 1; v < fh - 1; v++) {
-        const row = (y0 + v - 1) * W;
-        for (let u = 1; u < fw - 1; u++) {
-          const i = row + x0 + u - 1, l = labels[i];
-          if (l >= 0 && inS[l] && A[i] >= cut) M[v * fw + u] = 1;
-        }
-      }
-      // where this layer's own edge meets an upper colour on the same outline
-      // (a thin snow tip lying on the slope of the mountain) the edge must run
-      // straight on: no pulling back near such a meeting point
-      const E = new Float32Array(fw * fh);
-      for (let v = 1; v < fh - 1; v++) {
-        for (let u = 1; u < fw - 1; u++) {
-          const k = v * fw + u;
-          if (!M[k]) continue;
-          const i = (y0 + v - 1) * W + x0 + u - 1;
-          if (labels[i] !== own) continue;
-          if (!M[k - 1] || !M[k + 1] || !M[k - fw] || !M[k + fw]) E[k] = 1;
-        }
-      }
-      const sigma = tuck / 1.5;
-      const r = Math.max(1, Math.round(Math.sqrt(4 * sigma * sigma + 1) / 2));
-      boxBlur(M, fw, fh, r); boxBlur(M, fw, fh, r); boxBlur(M, fw, fh, r);
-      const re = Math.max(1, Math.round(tuck));
-      boxBlur(E, fw, fh, re); boxBlur(E, fw, fh, re);
-      for (let v = 1; v < fh - 1; v++) {
-        const row = (y0 + v - 1) * W;
-        for (let u = 1; u < fw - 1; u++) {
-          const i = row + x0 + u - 1, l = labels[i];
-          if (!(l >= 0 && inS[l])) continue;
-          const a = Math.min(1, A[i] * k2);
-          if (l === own) field[v * fw + u] = a;
-          else if (E[v * fw + u] > 0.05) field[v * fw + u] = a;
-          else field[v * fw + u] = a * Math.max(0, Math.min(1, 0.5 + (M[v * fw + u] - 0.93) * 8));
-        }
-      }
-      blur121(field, fw, fh);
-      let loops = contours(field, fw, fh, x0, y0);
-      loops = loops.filter(L => Math.abs(area(L)) >= Math.max(speck, 0.5));
-      // a loop inside an odd number of others is a hole (even-odd fill)
-      const inside = (pt, Q) => {
-        let c = false;
-        for (let i = 0, j = Q.length - 1; i < Q.length; j = i++) {
-          if ((Q[i][1] > pt[1]) !== (Q[j][1] > pt[1]) &&
-              pt[0] < (Q[j][0] - Q[i][0]) * (pt[1] - Q[i][1]) / (Q[j][1] - Q[i][1]) + Q[i][0]) c = !c;
-        }
-        return c;
-      };
-      const boxes = loops.map(Q => { let a = Infinity, b = Infinity, c = -Infinity, e = -Infinity; for (const q of Q) { if (q[0] < a) a = q[0]; if (q[1] < b) b = q[1]; if (q[0] > c) c = q[0]; if (q[1] > e) e = q[1]; } return [a, b, c, e]; });
-      let holes = loops.map((Q, k) => {
-        let depth = 0;
-        const pt = Q[0];
-        for (let m = 0; m < loops.length; m++) {
-          if (m === k) continue;
-          const bx = boxes[m];
-          if (pt[0] < bx[0] || pt[0] > bx[2] || pt[1] < bx[1] || pt[1] > bx[3]) continue;
-          if (inside(pt, loops[m])) depth++;
-        }
-        return depth % 2 === 1;
-      });
-      const keepIdx = loops.map((L, k) => k).filter(k => {
-        const L = loops[k];
-        const A2 = Math.abs(area(L));
-        if (A2 < Math.max(speck, 0.5)) return false;
-        // hair-thin slivers left between colours (under 1 px wide on average)
-        let per = 0;
-        for (let i = 0; i < L.length; i++) per += len(sub(L[(i + 1) % L.length], L[i]));
-        if (speck > 0 && A2 < 6 * speck && 2 * A2 / per < 1.0) return false;
-        // a small piece of a lower layer with none of its own colour inside is
-        // only an underlay for the colours above; it can only peek out as a sliver
-        if (j < order.length - 1 && A2 < 2500 && !holes[k]) {
-          let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
-          for (const q of L) { if (q[0] < bx0) bx0 = q[0]; if (q[0] > bx1) bx1 = q[0]; if (q[1] < by0) by0 = q[1]; if (q[1] > by1) by1 = q[1]; }
-          let ownN = 0;
-          for (let y = Math.max(0, Math.floor(by0)); y <= Math.min(H - 1, Math.ceil(by1)); y++) {
-            for (let x = Math.max(0, Math.floor(bx0)); x <= Math.min(W - 1, Math.ceil(bx1)); x++) {
-              const i = y * W + x;
-              if (labels[i] !== own || A[i] < cut) continue;
-              const px = x + 0.5, py = y + 0.5;
-              let c = false;
-              for (let a = 0, b = L.length - 1; a < L.length; b = a++) {
-                if ((L[a][1] > py) !== (L[b][1] > py) && px < (L[b][0] - L[a][0]) * (py - L[a][1]) / (L[b][1] - L[a][1]) + L[a][0]) c = !c;
-              }
-              if (c) ownN++;
-            }
-          }
-          if (ownN < Math.max(2, 0.03 * A2)) return false;
-        }
-        return true;
-      });
-      holes = keepIdx.map(k => holes[k]);
-      loops = keepIdx.map(k => loops[k]);
-      if (!loops.length) continue;
-      if (window.__vzDebug) window.__vzDebug.push({ col: hex(fill[own]), loops, opts, findCorners, loopToPath, relax, splitUTurns, relaxPinned });
-      let d = '';
-      for (let k = 0; k < loops.length; k++) {
-        const L = loops[k];
-        const r = loopToPath(L, opts, holes[k]);
-        d += r.d; nodes += r.nodes;
-      }
-      nPaths += loops.length;
-      const col = hex(fill[own]);
-      paths.push(`<path fill="${col}" fill-rule="evenodd" d="${d}"/>`);
-      outlines.push({ d, col });
-    }
-    if (id !== runId) return null;
+    res.forEach((r, k) => {
+      if (!r || !r.d) return;
+      nodes += r.nodes; nPaths += r.paths;
+      paths.push(`<path fill="${jobs[k].col}" fill-rule="evenodd" d="${r.d}"/>`);
+      outlines.push({ d: r.d, col: jobs[k].col });
+    });
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${src.w} ${src.h}" width="${src.w}" height="${src.h}">\n` +
                 paths.join('\n') + `\n</svg>\n`;
     return {
